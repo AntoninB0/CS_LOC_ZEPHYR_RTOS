@@ -1,0 +1,7 @@
+default: reflector
+build_dir: /home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build
+domains:
+  - name: reflector
+    build_dir: /home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/reflector
+flash_order:
+  - reflector

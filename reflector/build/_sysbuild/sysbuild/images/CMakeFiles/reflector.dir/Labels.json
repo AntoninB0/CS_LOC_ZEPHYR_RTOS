@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/_sysbuild/sysbuild/images/CMakeFiles/reflector"
+		},
+		{
+			"file" : "/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/_sysbuild/sysbuild/images/CMakeFiles/reflector.rule"
+		},
+		{
+			"file" : "/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/_sysbuild/sysbuild/images/CMakeFiles/reflector-complete.rule"
+		},
+		{
+			"file" : "/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/_sysbuild/sysbuild/images/reflector-prefix/src/reflector-stamp/reflector-build.rule"
+		},
+		{
+			"file" : "/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/_sysbuild/sysbuild/images/reflector-prefix/src/reflector-stamp/reflector-configure.rule"
+		},
+		{
+			"file" : "/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/_sysbuild/sysbuild/images/reflector-prefix/src/reflector-stamp/reflector-download.rule"
+		},
+		{
+			"file" : "/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/_sysbuild/sysbuild/images/reflector-prefix/src/reflector-stamp/reflector-install.rule"
+		},
+		{
+			"file" : "/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/_sysbuild/sysbuild/images/reflector-prefix/src/reflector-stamp/reflector-mkdir.rule"
+		},
+		{
+			"file" : "/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/_sysbuild/sysbuild/images/reflector-prefix/src/reflector-stamp/reflector-patch.rule"
+		},
+		{
+			"file" : "/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/reflector/build/_sysbuild/sysbuild/images/reflector-prefix/src/reflector-stamp/reflector-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"reflector"
+		],
+		"name" : "reflector"
+	}
+}

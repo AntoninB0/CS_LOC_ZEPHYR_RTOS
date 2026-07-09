@@ -1,0 +1,15 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build/cmake_install.cmake",
+		"/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build/_sysbuild/cmake_install.cmake",
+		"/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build/_sysbuild/sysbuild/images/cmake_install.cmake",
+		"/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build/_sysbuild/sysbuild/images/bootloader/cmake_install.cmake",
+		"/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build/_sysbuild/sysbuild/images/firmware_loader/cmake_install.cmake",
+		"/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build/modules/nrf/cmake_install.cmake",
+		"/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build/modules/mcuboot/cmake_install.cmake",
+		"/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build/_sysbuild/sysbuild/images/boards/cmake_install.cmake",
+		"/home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build/_sysbuild/sysbuild/images/soc/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

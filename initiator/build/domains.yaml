@@ -1,0 +1,7 @@
+default: initiator
+build_dir: /home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build
+domains:
+  - name: initiator
+    build_dir: /home/antoninbo/Bureau/260709/cs_localisation_v3_8_3_capsguard/cs_localisation_fixed/initiator/build/initiator
+flash_order:
+  - initiator
