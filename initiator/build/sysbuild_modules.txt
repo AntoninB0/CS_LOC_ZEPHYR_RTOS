@@ -1,2 +1,0 @@
-"nrf":"/home/antoninbo/ncs/v3.3.0/nrf":"/home/antoninbo/ncs/v3.3.0/nrf/sysbuild"
-"mcuboot":"/home/antoninbo/ncs/v3.3.0/bootloader/mcuboot":"/home/antoninbo/ncs/v3.3.0/bootloader/mcuboot/boot/zephyr/sysbuild"

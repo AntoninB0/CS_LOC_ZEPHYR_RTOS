@@ -1,0 +1,35 @@
+# ---- Zephyr / build artefacts ----
+build/
+*/build/
+twister-out/
+twister-out.*/
+*.o
+*.a
+*.elf
+*.hex
+*.bin
+*.map
+*.d
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.Python
+*.egg-info/
+.pytest_cache/
+
+# ---- Éditeurs / OS ----
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ---- Données volumineuses / captures (décommente si besoin) ----
+# iq_capture.json
+# *.json
