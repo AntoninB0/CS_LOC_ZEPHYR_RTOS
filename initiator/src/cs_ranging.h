@@ -14,24 +14,26 @@ int cs_setup_beacon(struct beacon_state *beacon);
 /* Init des états de mesure par beacon. À appeler une fois avant la boucle. */
 void cs_ranging_init(void);
 
-/* PIPELINE (recouvrement maximal du startup, pure attente de scheduling) :
- *  - cs_enable_beacon(i)    : lance la procédure CS du beacon i SANS attendre.
- *                             Retourne 0 si l'enable est accepté (< 0 sinon).
- *  - cs_wait_done_beacon(i) : attend la fin de la procédure et snapshotte les
- *                             steps locaux. Retourne 0 si données valides.
- *  - cs_fetch_beacon(i)     : récupère le RAS du pair pour le snapshot et
- *                             calcule la distance (m), ou < 0 si échec.
- * Usage optimal par beacon : wait_done → RÉ-enable immédiat → fetch.
- * Le startup de la procédure N+1 recouvre alors le fetch de N (et ceux des
- * autres beacons).
- *  - cs_collect_beacon(i)   : compat, wait_done + fetch enchaînés. */
-/* Dump IQ horodaté vers l'UART data (activable par commande UART IQON/IQOFF,
- * format des lignes documenté dans IQ_DUMP.md). */
+/* FREE-RUNNING (max_procedure_count = 0 : le contrôleur répète les procédures
+ * tous les procedure_interval, le handshake LL de ~495 ms n'est payé qu'à
+ * l'armement) :
+ *  - cs_enable_beacon(i)  : ARME les procédures du beacon i, UNE FOIS (et
+ *                           après reconnexion). Retourne 0 si accepté.
+ *  - cs_collect_beacon(i) : attend la prochaine mesure appariée (steps locaux
+ *                           + ranging data pair du même compteur) et émet le
+ *                           dump IQ horodaté (IQL/IQP). Retourne 0 si une
+ *                           mesure a été émise, < 0 sinon. *rearmed passe à
+ *                           false si le beacon doit être ré-armé (chemin
+ *                           on-demand uniquement). AUCUN calcul de distance
+ *                           (fait hors carte).
+ * La collecte ne consomme pas d'airtime : les procédures des N liens tournent
+ * en fond, la cadence par beacon = procedure_interval × intervalle de
+ * connexion (mesures non collectées à temps : écrasées, pas accumulées). */
+/* Dump IQ horodaté vers l'UART data (ON par défaut, désactivable par commande
+ * UART IQOFF/réactivable IQON, format des lignes documenté dans IQ_DUMP.md). */
 extern bool cs_iq_dump;
 
-int   cs_enable_beacon(int i);
-int   cs_wait_done_beacon(int i);
-float cs_fetch_beacon(int i);
-float cs_collect_beacon(int i);
+int cs_enable_beacon(int i);
+int cs_collect_beacon(int i, bool *rearmed);
 
 #endif /* CS_RANGING_H */

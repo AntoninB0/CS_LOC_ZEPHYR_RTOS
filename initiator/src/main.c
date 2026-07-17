@@ -178,12 +178,8 @@ static void display_thread(void *p1, void *p2, void *p3)
 			}
 			n++;
 			bt_addr_le_to_str(&beacons[i].addr, addr_str, sizeof(addr_str));
-			if (beacons[i].last_distance >= 0.0f) {
-				LOG_INF("[%d] %s  %.2f m", i, addr_str,
-					(double)beacons[i].last_distance);
-			} else {
-				LOG_INF("[%d] %s  -- m", i, addr_str);
-			}
+			LOG_INF("[%d] %s  %s", i, addr_str,
+				beacons[i].cs_ready ? "ranging" : "setup");
 		}
 
 		if (n == 0) {
@@ -243,20 +239,20 @@ int main(void)
 	}
 	LOG_INF("All %d reflectors connected — starting application", MAX_BEACONS);
 
-	/* ── PIPELINE CONTINU : ré-enable IMMÉDIAT après chaque collecte ─────────
-	 * v1 (enable-tous puis collect-tous par cycle) ne recouvrait les startups
-	 * qu'À L'INTÉRIEUR d'un cycle : entre deux cycles, le startup repartait de
-	 * zéro à découvert. Ici chaque beacon est ré-armé dès sa collecte finie :
-	 * le startup de sa procédure N+1 court PENDANT le fetch RAS des autres
-	 * beacons. En régime établi, le temps de cycle tend vers
-	 * max(startup, Σ fetch) au lieu de startup + Σ fetch.
-	 * (Le startup n'occupe pas le radio : c'est de l'attente de scheduling,
-	 * donc parfaitement recouvrable par le GATT.)
+	/* ── MESURE CONTINUE (free-running) ──────────────────────────────────────
+	 * Les procédures CS de chaque beacon sont armées UNE FOIS
+	 * (max_procedure_count = 0) : le contrôleur les répète ensuite tous les
+	 * procedure_interval sans nouveau handshake LL — le startup de ~495 ms
+	 * (≈ 11 × intervalle de connexion) n'est payé qu'à l'armement, plus
+	 * jamais par mesure. L'ancien pipeline one-shot payait ce startup à
+	 * CHAQUE mesure (cycle 3 beacons ≈ 1485 ms) ; ici la boucle ne fait que
+	 * collecter les paires (steps locaux + RAS pair) au fil de l'eau :
+	 * cycle ≈ période de procédure (~180 ms en drone N=3).
 	 * NOTE : pas de bt_conn_ref pendant la mesure (déconnexion en plein cycle
 	 * non protégée) — OK sur banc, à durcir pour la prod. */
 	cs_ranging_init();
 
-	bool in_flight[MAX_BEACONS] = { false };
+	bool armed[MAX_BEACONS] = { false };
 	uint8_t seq[SCHED_ROUND_MAX];
 
 	while (true) {
@@ -264,14 +260,13 @@ int main(void)
 		int64_t t_cycle = k_uptime_get();
 
 		/* Le scheduler fournit l'ordre de passage du round : indices de
-		 * beacons prêts, répétitions permises (un beacon "pertinent"
-		 * peut être mesuré plusieurs fois par round). AUTO : slots
-		 * bonus aux beacons de moindre erreur ; MANUAL : ordre UART. */
+		 * beacons prêts, répétitions permises. AUTO : un slot par
+		 * beacon prêt ; MANUAL : ordre UART. */
 		int len = scheduler_build_round(seq);
 
 		if (len == 0) {
 			for (int i = 0; i < MAX_BEACONS; i++) {
-				in_flight[i] = false;
+				armed[i] = false;
 			}
 			k_sleep(K_MSEC(50));
 			continue;
@@ -287,39 +282,35 @@ int main(void)
 			k_mutex_unlock(&beacons_mutex);
 
 			if (!ready) {
-				/* Déconnecté depuis la construction du round */
-				in_flight[i] = false;
+				/* Déconnecté : le contrôleur a stoppé ses
+				 * procédures, il faudra ré-armer au retour. */
+				armed[i] = false;
 				continue;
 			}
 
-			/* Rien en vol (démarrage, ou échec au tour précédent) :
-			 * armer et passer au suivant — la collecte attendra le
-			 * prochain passage, le startup court pendant ce temps. */
-			if (!in_flight[i]) {
-				in_flight[i] = (cs_enable_beacon(i) == 0);
-				enable_failed |= !in_flight[i];
+			/* Pas encore armé (démarrage, reconnexion, ou échec au
+			 * tour précédent) : armer et passer au suivant — la
+			 * première mesure arrive après le startup LL, pendant
+			 * que la boucle collecte les autres beacons. */
+			if (!armed[i]) {
+				armed[i] = (cs_enable_beacon(i) == 0);
+				enable_failed |= !armed[i];
 				continue;
 			}
 
-			/* 1. Attendre la fin de la procédure N (snapshot). */
-			int werr = cs_wait_done_beacon(i);
+			/* Collecte de la prochaine mesure appariée + dump IQ
+			 * horodaté (IQL/IQP). Aucune distance : calcul déporté
+			 * hors carte (Python) à partir des lignes IQ. */
+			bool rearmed = true;
+			int rc = cs_collect_beacon(i, &rearmed);
 
-			/* 2. Ré-armer AVANT le fetch : le startup de N+1 (pure
-			 * attente de scheduling, radio libre) recouvre le fetch
-			 * GATT de N ci-dessous ET ceux des autres beacons. */
-			in_flight[i] = (cs_enable_beacon(i) == 0);
-			enable_failed |= !in_flight[i];
+			if (!rearmed) {
+				armed[i] = false;
+				enable_failed = true;
+			}
+			scheduler_report(i, rc == 0);
 
-			/* 3. Fetch RAS + distance sur le snapshot de N. */
-			float d = (werr == 0) ? cs_fetch_beacon(i) : -1.0f;
-
-			scheduler_report(i, d, werr == 0 && d >= 0.0f);
-
-			k_mutex_lock(&beacons_mutex, K_FOREVER);
-			beacons[i].last_distance = d;
-			k_mutex_unlock(&beacons_mutex);
-
-			if (d < 0.0f) {
+			if (rc != 0) {
 				LOG_WRN("Beacon[%d] ranging failed", i);
 			}
 		}

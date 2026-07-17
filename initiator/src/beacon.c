@@ -48,7 +48,6 @@ bool free_beacon(struct bt_conn *conn)
 			beacons[i].active        = false;
 			beacons[i].conn          = NULL;
 			beacons[i].cs_ready      = false;
-			beacons[i].last_distance = -1.0f;
 			released = true;
 			break;
 		}

@@ -18,8 +18,8 @@
  * Rappel : reflasher aussi les réflecteurs si CS_EVENT_LEN change de famille.
  * Référence des paramètres : doc_optimised_parameters.ods (renvois Vol 6 H).
  * ═══════════════════════════════════════════════════════════════════════════ */
-/* #define CONF_DRONE_FAST_OUTDOOR*/   /* drone extérieur rapide */
-#define CONF_BOAT_DOCKING   /* accostage bateau, précision courte portée */
+#define CONF_DRONE_FAST_OUTDOOR   /* drone extérieur rapide */
+/* #define CONF_BOAT_DOCKING   accostage bateau, précision courte portée */
 /* #define CONF_DRONE_INDOOR */   /* drone lent intérieur, multipath dense */
 
 #define CS_NUM_BEACONS 3          /* 1..5 */
@@ -122,8 +122,9 @@
  * s'applique qu'entre connexions centrales) ; N>=2 → N × créneau, le SDC
  * espace les ancres ACL de SPACING (déterministe, sans collision).
  * Startup ≈ 11 × intervalle (LL_CS_REQ/RSP/IND + marge SDC, incompressible
- * en nombre) → la cadence chute linéairement avec N : voir le tableau dans
- * CONFIGS_MULTI_BEACONS.md. */
+ * en nombre), payé UNE FOIS à l'armement en free-running
+ * (max_procedure_count = 0). La cadence en régime établi vaut ensuite
+ * procedure_interval × intervalle de connexion par beacon (∝ N). */
 #define CS_MAX_BEACONS          CS_NUM_BEACONS
 #define CS_CONN_INTERVAL_UNITS  (CS_NUM_BEACONS == 1 ? CS_SINGLE_FLOOR_UNITS \
                                  : CS_NUM_BEACONS * CS_SPACING_UNITS)

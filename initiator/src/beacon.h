@@ -16,7 +16,6 @@ struct beacon_state {
 	/* Channel Sounding */
 	bool           cs_ready;     /* setup CS terminé, ranging possible */
 	uint8_t        cs_config_id; /* id de config CS retourné par le contrôleur */
-	float          last_distance; /* dernière distance estimée en mètres, -1 si invalide */
 };
 
 extern struct beacon_state beacons[MAX_BEACONS];

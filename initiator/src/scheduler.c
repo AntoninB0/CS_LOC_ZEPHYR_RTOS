@@ -9,14 +9,21 @@
 
 LOG_MODULE_DECLARE(app_main, LOG_LEVEL_INF);
 
-/* Paramètres de l'estimateur d'erreur (mode AUTO) */
+/* Paramètres du score de fiabilité (mode AUTO) : EWMA du taux d'échec, dans
+ * [0,1]. Plus BAS = plus fiable → priorité pour les slots bonus. */
 #define ERR_EWMA_ALPHA   0.2f  /* poids d'une nouvelle observation */
-#define ERR_FAIL_PENALTY 1.0f  /* "erreur" injectée par échec (m) */
-#define ERR_INIT         0.5f  /* a priori neutre au démarrage (m) */
-#define ERR_FLOOR        0.02f /* évite les poids infinis */
+#define ERR_FAIL_PENALTY 1.0f  /* cible EWMA d'un échec */
+#define ERR_INIT         0.5f  /* a priori neutre au démarrage */
+#define ERR_FLOOR        0.02f /* évite qu'un beacon parfait fige les autres */
 
-/* Slots bonus par round en AUTO, attribués aux meilleurs beacons. */
-#define SCHED_BONUS_SLOTS (CS_MAX_BEACONS > 1 ? CS_MAX_BEACONS - 1 : 0)
+/* Slots bonus par round en AUTO, attribués aux meilleurs beacons.
+ * 0 depuis le passage en procédures FREE-RUNNING : les mesures de chaque
+ * beacon arrivent toutes les procedure_interval quel que soit le round — un
+ * slot dupliqué ne mesure pas plus vite le beacon favorisé (cadence plafonnée
+ * par le contrôleur), il ne fait qu'allonger le round et JETER des mesures
+ * des autres beacons (écrasées avant collecte). En one-shot c'était pire :
+ * chaque doublon payait un startup LL complet (~495 ms) à découvert. */
+#define SCHED_BONUS_SLOTS 0
 
 enum sched_mode { SCHED_AUTO, SCHED_MANUAL };
 
@@ -25,10 +32,8 @@ static struct {
 	enum sched_mode mode;
 	uint8_t         manual_seq[SCHED_ROUND_MAX];
 	int             manual_len;
-	/* état par beacon */
+	/* état par beacon : score de fiabilité EWMA (0 = fiable, 1 = échoue) */
 	float           err_ewma[CS_MAX_BEACONS];
-	float           last_d[CS_MAX_BEACONS];
-	bool            has_last[CS_MAX_BEACONS];
 } S;
 
 void scheduler_init(void)
@@ -38,7 +43,6 @@ void scheduler_init(void)
 	S.manual_len = 0;
 	for (int i = 0; i < CS_MAX_BEACONS; i++) {
 		S.err_ewma[i] = ERR_INIT;
-		S.has_last[i] = false;
 	}
 }
 
@@ -52,29 +56,18 @@ static bool beacon_ready(int i)
 	return r;
 }
 
-void scheduler_report(int i, float distance, bool ok)
+void scheduler_report(int i, bool ok)
 {
 	if (i < 0 || i >= CS_MAX_BEACONS) {
 		return;
 	}
 	k_mutex_lock(&S.lock, K_FOREVER);
-	if (!ok || distance < 0.0f) {
-		/* Un échec compte comme une grosse erreur : le beacon perd ses
-		 * slots bonus mais garde son slot de base (il reste observé). */
-		S.err_ewma[i] += ERR_EWMA_ALPHA * (ERR_FAIL_PENALTY - S.err_ewma[i]);
-		S.has_last[i] = false;
-	} else {
-		if (S.has_last[i]) {
-			float inst = distance - S.last_d[i];
+	/* EWMA du taux d'échec : un échec tire le score vers ERR_FAIL_PENALTY
+	 * (le beacon perd ses slots bonus mais garde son slot de base, il reste
+	 * observé) ; un succès le tire vers 0 (candidat aux slots bonus). */
+	float target = ok ? 0.0f : ERR_FAIL_PENALTY;
 
-			if (inst < 0.0f) {
-				inst = -inst;
-			}
-			S.err_ewma[i] += ERR_EWMA_ALPHA * (inst - S.err_ewma[i]);
-		}
-		S.last_d[i]   = distance;
-		S.has_last[i] = true;
-	}
+	S.err_ewma[i] += ERR_EWMA_ALPHA * (target - S.err_ewma[i]);
 	if (S.err_ewma[i] < ERR_FLOOR) {
 		S.err_ewma[i] = ERR_FLOOR;
 	}
@@ -96,20 +89,28 @@ static int build_auto(uint8_t seq[SCHED_ROUND_MAX], const bool ready[CS_MAX_BEAC
 		}
 	}
 
-	/* Bonus : un par tour au beacon prêt d'erreur minimale (pondération
-	 * douce : avec 2 beacons et 1 bonus, le meilleur est mesuré 2× plus
-	 * en profil drone). */
+	/* Bonus : un par tour au beacon prêt d'erreur minimale. RÉPARTIS entre
+	 * beacons distincts (moins de bonus d'abord, erreur ensuite) : l'ancien
+	 * critère erreur seule envoyait TOUS les bonus au même beacon (l'EWMA ne
+	 * bouge pas pendant la boucle, égalité → plus petit index), d'où des
+	 * rounds [0,1,2,0,0] avec doublon adjacent — exactement ce que
+	 * l'entrelacement ci-dessous doit éviter. */
+	int bonus[CS_MAX_BEACONS] = { 0 };
+
 	for (int b = 0; b < SCHED_BONUS_SLOTS && n_ready > 1; b++) {
 		int   best = -1;
 		float best_err = 0.0f;
 
 		for (int i = 0; i < CS_MAX_BEACONS; i++) {
-			if (ready[i] && (best < 0 || S.err_ewma[i] < best_err)) {
+			if (ready[i] &&
+			    (best < 0 || bonus[i] < bonus[best] ||
+			     (bonus[i] == bonus[best] && S.err_ewma[i] < best_err))) {
 				best     = i;
 				best_err = S.err_ewma[i];
 			}
 		}
 		if (best >= 0) {
+			bonus[best]++;
 			slots[best]++;
 		}
 	}

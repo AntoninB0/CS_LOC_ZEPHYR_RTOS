@@ -55,9 +55,16 @@ struct bt_le_cs_create_config_params cs_create_config = {
 struct bt_le_cs_set_procedure_parameters_param cs_proc_params = {
     .config_id              = 0, /* mis à jour au runtime dans do_set_procedure_params() */
     .max_procedure_len      = CS_PROC_LEN_UNITS, /* ×0,625 ms. Fenêtre courte = placement facile (drone) ; large pour ~72 canaux (précision) */
+    /* Période d'échantillonnage par lien = interval × intervalle de connexion
+     * (unité : événements de connexion). Drone N=3 : 4 × 45 ms = 180 ms/beacon. */
     .min_procedure_interval = 4,
     .max_procedure_interval = 4,
-    .max_procedure_count    = 1,   /* one-shot : s'arrête seule (pas de disable → pas de 0x0c) */
+    /* 0 = FREE-RUNNING : le contrôleur répète les procédures tous les
+     * procedure_interval jusqu'au disable. Le handshake LL (~11 événements
+     * × intervalle ≈ 495 ms) n'est payé qu'UNE FOIS à l'armement, plus
+     * jamais par mesure — c'était lui qui plafonnait la cadence en one-shot
+     * (max_procedure_count=1 : cycle 3 beacons ≈ 1485 ms constaté). */
+    .max_procedure_count    = 0,
     .min_subevent_len       = CS_SUBEVENT_LEN_US,
     .max_subevent_len       = CS_SUBEVENT_LEN_US, /* ⚠ couplé à CONFIG_BT_CTLR_SDC_CS_EVENT_LEN_DEFAULT (BUILD_ASSERT ci-dessus) */
     .tone_antenna_config_selection = BT_LE_CS_TONE_ANTENNA_CONFIGURATION_A1_B1,

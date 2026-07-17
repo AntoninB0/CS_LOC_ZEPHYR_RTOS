@@ -1,12 +1,14 @@
-# Dump IQ horodaté — firmware ↔ cs_console.py
+# Dump IQ horodaté — firmware ↔ tools/ (uart_console + cs_decoder)
 
 ## Activation
-Commande UART `IQON` (désactivation `IQOFF`). Le dump est émis par le thread de
-mesure APRÈS chaque fetch réussi, sur l'UART data (uart21) — il n'interfère pas
-avec le pipeline CS, mais ajoute le temps d'écriture UART au cycle : ~30-60 ms
-par procédure à 115200 bauds. **Passer uart21 à 1 Mbaud (devicetree,
-`current-speed`) pour un usage continu** (~4-7 ms), et sélectionner le même
-débit dans cs_console.py.
+**ON par défaut** (l'initiateur ne calcule plus de distance : le dump IQ EST sa
+sortie ; désactivation `IQOFF`, réactivation `IQON`). Le dump est émis par le
+thread de mesure APRÈS chaque fetch réussi, sur l'UART data (uart21) — il n'interfère pas
+avec le pipeline CS, mais ajoute le temps d'écriture UART au cycle. L'UART data
+est réglé à **921600** (`current-speed` dans l'overlay board — repli depuis
+1 Mbaud, le J-Link OB du DK tronquait des lignes) → ~5-8 ms par procédure au
+lieu de ~30-60 ms à 115200. Sélectionner le même débit côté hôte
+(uart_console.py / cs_decoder.py : 921600 par défaut).
 
 ## Format des lignes
 ```
@@ -27,23 +29,13 @@ IQP,<beacon>,<ranging_counter>,<t_ms>,<HEX>     (ranging data RAS du pair)
 - HEX pair : ranging data au format RAS, conservé brut dans le JSON
   (`raw_hex`) — le décodage RAS pair pourra être ajouté côté Python.
 
-## JSON produit (cs_console.py, bouton « Capture IQ »)
-```json
-{ "records": [
-  { "type": "local_subevent", "beacon": 0, "ranging_counter": 42,
-    "t_board_ms": 123456, "t_host": 1751812345.1, "raw_hex": "…",
-    "steps": [ { "idx": 0, "mode": 0, "channel": 2, "raw": "…" },
-               { "idx": 2, "mode": 2, "channel": 34,
-                 "antenna_permutation": 0,
-                 "paths": [ { "i": -512, "q": 1023, "tone_quality": 0 } ] } ] },
-  { "type": "peer_procedure", "beacon": 0, "ranging_counter": 42,
-    "t_board_ms": 123900, "raw_hex": "…" } ] }
-```
-
-## cs_console.py (tools/)
-Fenêtre unique : à gauche la console UART (choix du port/baud, envoi de
-commandes scheduler avec boutons rapides AUTO/ORDER/IQON/IQOFF, capture IQ →
-JSON avec compteur et masquage des lignes IQ) ; à droite les terminaux RTT,
-un onglet par carte (sélection de la sonde J-Link par numéro de série, cible
-`NRF54L15_M33` ajustable). Dépendances : `pip install pyserial pylink-square`
-(pylink optionnel, requis seulement pour le RTT ; driver SEGGER nécessaire).
+## Chaîne hôte (tools/)
+- **cs_decoder.py** : décode/valide les lignes (steps IQL, RAS IQP, RTT mode 1),
+  apparie local/réflecteur par ranging counter et livre des objets
+  `Measurement` complets (`measurements_from_serial` / `measurements_from_lines`).
+  Décodage RAS pair inclus — le `raw_hex` brut n'est plus la seule vue.
+- **estimation.py** : distance par mesure (IFFT -> vraisemblance von Mises ->
+  anti-lobe naboer -> fusion RTT anti-repliement 50 m -> médiane glissante).
+- **uart_console.py** : console interactive (commandes IQON/IQOFF/AUTO/ORDER,
+  affichage d'une ligne par mesure avec distance) ; mode `--file` pour rejouer
+  une capture (ex. tools/capture_ref_921600.txt). Dépendances : install.txt.

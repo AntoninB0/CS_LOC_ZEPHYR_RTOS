@@ -9,8 +9,6 @@ target_sources(app PRIVATE
 	src/beacon.c
 	src/pairing.c
 	src/cs_ranging.c
-	src/distance_estimation.c
-	src/ble_protocol_data.c
 	src/if.c
 	src/scheduler.c
 )

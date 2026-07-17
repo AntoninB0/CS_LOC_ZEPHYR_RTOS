@@ -6,14 +6,19 @@
  * if.c choisit uart30 (banc PC) ou uart21 (embarqué drone) via
  * IF_UART_ON_VCOM dans if.c. */
 
+/* 1 Mbaud sur le canal data : le dump IQ continu (IQL/IQP) passe de ~30-60 ms
+ * à ~4-7 ms par procédure. Les deux UART montés au même débit pour couvrir les
+ * deux cibles de if.c (uart30 = VCOM banc PC ; uart21 = liaison drone). NB : à
+ * 1 Mbaud le J-Link OB du DK peut tronquer selon sa version de firmware ;
+ * si lignes IQ corrompues sur le VCOM, redescendre uart30 à 921600. */
 &uart30 {
     status = "okay";
-    current-speed = <115200>;
+    current-speed = <921600>;
 };
 
 &uart21 {
     status = "okay";
-    current-speed = <115200>;
+    current-speed = <1000000>;
     pinctrl-0 = <&uart21_default>;
     pinctrl-names = "default";
 };
