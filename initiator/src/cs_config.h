@@ -1,6 +1,8 @@
 #ifndef CS_CONFIG_H_
 #define CS_CONFIG_H_
 
+/*io pin trigger par une interruption pour chaque cs ranging et envoyer a la sentiboard pour avoir un timestamp */
+
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/cs.h>
@@ -18,11 +20,11 @@
  * Rappel : reflasher aussi les réflecteurs si CS_EVENT_LEN change de famille.
  * Référence des paramètres : doc_optimised_parameters.ods (renvois Vol 6 H).
  * ═══════════════════════════════════════════════════════════════════════════ */
-#define CONF_DRONE_FAST_OUTDOOR   /* drone extérieur rapide */
-/* #define CONF_BOAT_DOCKING   accostage bateau, précision courte portée */
-/* #define CONF_DRONE_INDOOR */   /* drone lent intérieur, multipath dense */
+//#define CONF_DRONE_FAST_OUTDOOR   /*drone extérieur rapide */
+#define CONF_BOAT_DOCKING /*   accostage bateau, précision courte portée */
+//- #define CONF_DRONE_INDOOR    /* drone lent intérieur, multipath dense */
 
-#define CS_NUM_BEACONS 3          /* 1..5 */
+#define CS_NUM_BEACONS 2          /* 1..5 */
 
 /* Mode de récupération des ranging data pair : 1 = RAS temps réel (fetch ~0,
  * pas de rétention), 0 = on-demand (fallback validé). Voir itération 3. */
@@ -42,7 +44,7 @@
 #define CS_PROC_LEN_UNITS       40    /* 25 ms : fenêtre courte, placement facile */
 #define CS_MODE0_STEPS          2
 #define CS_MAIN_STEPS_MAX       6
-#define CS_MODE                 BT_CONN_LE_CS_MAIN_MODE_2_SUB_MODE_1
+#define CS_MODE                 BT_CONN_LE_CS_MAIN_MODE_2_SUB_MODE_1 /*tester sans submode
 /* ⚠ CAPACITÉS SDC (table nrfxlib, vérifiée sur cible — Create Config 0x11
  * sinon) : sounding sequence, CSA #3C, 2M_2BT et NADM NON SUPPORTÉS par le
  * SoftDevice Controller. Le levier de datation RTT DISPONIBLE est la
@@ -70,7 +72,7 @@
  * ⚠ N>=4 : thinning 2 imposé (75 m non-ambigu, RAM ~÷2 par beacon).
  * ───────────────────────────────────────────────────────────────────────── */
 #elif defined(CONF_BOAT_DOCKING)
-#define CS_CHANNEL_THINNING     (CS_NUM_BEACONS >= 4 ? 2 : 1)
+#define CS_CHANNEL_THINNING     (CS_NUM_BEACONS >= 3 ? 2 : 1)
 #define CS_SUBEVENT_LEN_US      8000
 #define CS_PROC_LEN_UNITS       100   /* 62,5 ms : ~72 canaux à écouler */
 #define CS_MODE0_STEPS          3
@@ -81,7 +83,20 @@
 #define CS_CHSEL_TYPE           BT_CONN_LE_CS_CHSEL_TYPE_3B
 #define CS_CH3C_SHAPE           BT_CONN_LE_CS_CH3C_SHAPE_HAT   /* inutilisé en 3B */
 #define CS_CHMAP_REPETITION     (CS_NUM_BEACONS <= 2 ? 2 : 1)
-#define CS_MAX_TX_POWER         0     /* dBm */
+/* Puissance TX max (EIRP) de TOUTES les transmissions CS. PLAFOND : le
+ * contrôleur prend le niveau matériel supporté le plus proche <= cette valeur.
+ * Plage HCI -127..+20 dBm ; nRF54L15 : max réel +8 dBm (au-delà = plafonné).
+ * BT_HCI_OP_LE_CS_MAX_MAX_TX_POWER (=20) = "prends le maximum matériel".
+ * ⚠ Baisser la TX ne réduit PAS le multipath (direct et réflexions atténués du
+ *   même rapport) : le 0 dBm ci-dessous est de l'anti-saturation courte portée
+ *   (< qq m, un signal trop fort déforme la phase), pas un filtre multipath.
+ *   À distance / en extérieur, MONTER la TX pour le SNR.
+ * Paliers indicatifs (dBm) :
+ *      0    accostage serré < ~3 m (anti-saturation)      <-- valeur actuelle
+ *     +4    intérieur / quelques mètres
+ *     +8    extérieur, portée max nRF54L15
+ *   BT_HCI_OP_LE_CS_MAX_MAX_TX_POWER   laisse le contrôleur prendre son max */
+#define CS_MAX_TX_POWER         8    /* dBm */
 #define CS_SPACING_UNITS        16    /* 20 ms/lien = ACL 3750 + CS 8500 + marge */
 #define CS_SINGLE_FLOOR_UNITS   16
 #define CS_MAX_STEPS_PER_PROC   (CS_NUM_BEACONS <= 2 ? 176 : \
@@ -123,7 +138,7 @@
  * espace les ancres ACL de SPACING (déterministe, sans collision).
  * Startup ≈ 11 × intervalle (LL_CS_REQ/RSP/IND + marge SDC, incompressible
  * en nombre), payé UNE FOIS à l'armement en free-running
- * (max_procedure_count = 0). La cadence en régime établi vaut ensuite
+ *#define CS_CHANNEL_THINNING  (CS_NUM_BEACONS >= 3 ? 2 : 1) (max_procedure_count = 0). La cadence en régime établi vaut ensuite
  * procedure_interval × intervalle de connexion par beacon (∝ N). */
 #define CS_MAX_BEACONS          CS_NUM_BEACONS
 #define CS_CONN_INTERVAL_UNITS  (CS_NUM_BEACONS == 1 ? CS_SINGLE_FLOOR_UNITS \

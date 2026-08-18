@@ -20,8 +20,12 @@ Usage :
 Commandes une fois lancé (Entrée pour valider) :
   IQON / IQOFF / AUTO / ORDER:0,1,2   envoyées au firmware
   :test [s]     collecte pendant s secondes (défaut 30) puis imprime un
-                rapport par beacon et sauve données+rapport en JSON
-                (test_AAAAMMJJ_HHMMSS.json). Alias :mesure.
+                rapport par beacon et crée un DOSSIER horodaté
+                test_AAAAMMJJ_HHMMSS/ contenant : le JSON (données+rapport,
+                IQ par tone inclus -> réanalysable), le tracé PNG, config.txt
+                (snapshot config firmware) et estimateur/ (figures IFFT +
+                bayésien de la mesure typique et aberrante de chaque beacon,
+                pour illustrer incertitude/multipath). Alias :mesure.
   :cal [b] [m]  afficher / régler les offsets de calibration (voir estimation.py)
   :show/:nshow  afficher / masquer la ligne par mesure
   :raw          afficher aussi les lignes UART brutes (toggle)
@@ -30,7 +34,8 @@ Commandes une fois lancé (Entrée pour valider) :
   :q  ou Ctrl-D quitter
 
 Mode script (sans interaction) : --test N avec --port -> collecte N secondes,
-rapport + JSON, puis quitte. Pratique pour les séries de calibration.
+crée le dossier horodaté (JSON+IQ, PNG, config.txt, figures estimateur/), puis
+quitte. Pratique pour les séries de calibration.
 
 Dépendance : pyserial (venv : voir install.txt). La fonction d'estimation vit
 dans tools/estimation.py — voir le contrat dans ce fichier.
@@ -39,6 +44,7 @@ dans tools/estimation.py — voir le contrat dans ce fichier.
 import argparse
 import importlib
 import json
+import os
 import statistics
 import sys
 import threading
@@ -78,6 +84,35 @@ def load_estimate():
         return None
 
 
+def write_config_snapshot(path):
+    """Écrit dans `path` un .txt qui concatène la config firmware ACTUELLE
+    (cs_config.h + prj.conf + overlays précision + reflector/prj.conf), pour
+    que chaque test garde la trace exacte de la config avec laquelle il a été
+    lancé. Best-effort : les fichiers absents sont notés, jamais fatals.
+    Les chemins sont relatifs à l'emplacement de ce script (pas au cwd)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo = os.path.dirname(here)                       # tools/ -> racine du repo
+    rel_files = [
+        "initiator/src/cs_config.h",                   # profil + N (les 2 knobs)
+        "initiator/prj.conf",                          # réservations SDC de base
+        "initiator/overlay-precision-multi.conf",      # boat/indoor N>=2
+        "initiator/overlay-precision-single.conf",     # boat/indoor N==1
+        "reflector/prj.conf",                          # CS_EVENT_LEN côté réflecteur
+    ]
+    out = [f"# Snapshot config firmware — {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+           "# (l'overlay réellement compilé dépend du flag build.sh : --boat-n "
+           "= multi, --boat-1 = single, drone = aucun)\n"]
+    for rel in rel_files:
+        out.append("\n" + "=" * 78 + f"\n# {rel}\n" + "=" * 78 + "\n")
+        try:
+            with open(os.path.join(repo, rel), encoding="utf-8", errors="replace") as f:
+                out.append(f.read())
+        except OSError as e:
+            out.append(f"[introuvable : {e}]\n")
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(out)
+
+
 class Display:
     """Pousse chaque ligne UART dans le décodeur ; affiche chaque mesure
     complète, augmentée de la distance rendue par estimate(m). Aucune
@@ -94,11 +129,13 @@ class Display:
         self.test_until = None      # échéance time.time() du test en cours, sinon None
         self.test_secs = 0
         self.test_data = {}         # {beacon: [enregistrements dict]}
+        self.test_done = threading.Event()  # levé quand rapport+JSON+PNG écrits
         self.show_distances = False # ligne par mesure masquée par défaut (:show)
 
     def start_test(self, secs: int):
         self.test_data = {}
         self.test_secs = secs
+        self.test_done.clear()
         self.test_until = time.time() + secs
         print(f"[test lancé : {secs} s de collecte, rapport à la fin]",
               file=sys.stderr, flush=True)
@@ -131,7 +168,10 @@ class Display:
     def _finish_test(self):
         """Fin de fenêtre : imprime le rapport et sauve données+rapport en JSON."""
         rapport = self._build_report()
-        fname = time.strftime("test_%Y%m%d_%H%M%S.json")
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        outdir = f"test_{stamp}"                    # dossier horodaté du test
+        os.makedirs(outdir, exist_ok=True)
+        fname = os.path.join(outdir, f"test_{stamp}.json")
         try:      # traçabilité : offsets de calibration actifs pendant ce test
             import estimation
             cal = {"global_m": getattr(estimation, "CAL_OFFSET_M", 0.0),
@@ -158,9 +198,56 @@ class Display:
                   f"σ={r['sigma_m']:.2f}  min/max={r['min_m']:.2f}/{r['max_m']:.2f}  "
                   f"outliers>1m={r['outliers_sup_1m']}  "
                   f"rssi={r['rssi_moyen_dbm']} dBm", flush=True)
+        cfg = os.path.join(outdir, "config.txt")
+        try:                                        # config exacte du test
+            write_config_snapshot(cfg)
+        except OSError as e:
+            print(f"[snapshot config en échec : {type(e).__name__}: {e}]",
+                  file=sys.stderr, flush=True)
+            cfg = None
         png = self._plot(fname.replace(".json", ".png"))
-        print(f"[données + rapport -> {fname}]"
-              + (f"  [tracé -> {png}]" if png else "") + "\n", flush=True)
+        est_figs = self._plot_estimator(outdir)   # IFFT/bayésien par beacon
+        contenu = ["test_%s.json" % stamp]
+        if png:
+            contenu.append("test_%s.png" % stamp)
+        if cfg:
+            contenu.append("config.txt")
+        if est_figs:
+            contenu.append(f"estimateur/ ({len(est_figs)} fig)")
+        print(f"[dossier -> {outdir}/ : " + ", ".join(contenu) + "]\n", flush=True)
+
+    def _plot_estimator(self, outdir):
+        """Figures IFFT + vraisemblance bayésienne (incertitude / multipath)
+        pour la mesure TYPIQUE et la plus ABERRANTE de chaque beacon. Réutilise
+        viz_estimateur (mêmes fonctions que l'estimateur). Best-effort : toute
+        erreur est encaissée, le rapport reste écrit. Renvoie la liste des PNG."""
+        try:
+            import numpy as np
+            import viz_estimateur as vz
+        except Exception as e:
+            print(f"[figures estimateur indisponibles : {type(e).__name__}: {e}]",
+                  file=sys.stderr, flush=True)
+            return []
+        made = []
+        subdir = os.path.join(outdir, "estimateur")
+        for b, recs in sorted(self.test_data.items()):
+            cand = [r for r in recs if r.get("iq") and r.get("d_brut_m") is not None]
+            if not cand:
+                continue
+            med = float(np.median([r["d_brut_m"] for r in cand]))
+            typ = min(cand, key=lambda r: abs(r["d_brut_m"] - med))
+            wor = max(cand, key=lambda r: abs(r["d_brut_m"] - med))
+            picks = [("typique", typ)] + ([("aberrante", wor)] if wor is not typ else [])
+            for tag, r in picks:
+                try:
+                    os.makedirs(subdir, exist_ok=True)
+                    png = os.path.join(subdir, f"b{b}_{tag}_rc{r['counter']}.png")
+                    if vz.plot_measurement(vz.meas_from_record(b, r), png) is not None:
+                        made.append(png)
+                except Exception as e:
+                    print(f"[fig estimateur b{b} {tag} en échec : "
+                          f"{type(e).__name__}: {e}]", file=sys.stderr, flush=True)
+        return made
 
     def _plot(self, fname):
         """PNG : distance BRUTE (points, avant médiane glissante) et lissée
@@ -236,6 +323,11 @@ class Display:
                 "rssi_loc": m.rssi_loc,
                 "rssi_ref": m.rssi_ref,
                 "tones": len(m.tones),
+                # IQ par tone -> le JSON devient réanalysable (figures IFFT/
+                # bayésien hors ligne, viz_estimateur.py --json). Compact :
+                # [canal, i_loc, q_loc, i_ref, q_ref, tq_loc, tq_ref].
+                "iq": [[t.channel, t.i_loc, t.q_loc, t.i_ref, t.q_ref,
+                        t.tq_loc, t.tq_ref] for t in m.tones],
             })
         self.poll_test()
 
@@ -251,6 +343,10 @@ class Display:
         except Exception as e:
             print(f"[rapport en échec : {type(e).__name__}: {e}]",
                   file=sys.stderr, flush=True)
+        finally:
+            # signale au mode --test que rapport+JSON+PNG sont écrits : il peut
+            # fermer le processus sans interrompre le tracé (course résolue).
+            self.test_done.set()
 
 
 def reader_loop(ser, stop, disp: Display):
@@ -298,7 +394,8 @@ def main():
                     help="débit (défaut 921600 = current-speed de l'overlay)")
     ap.add_argument("--list", action="store_true", help="lister les ports et quitter")
     ap.add_argument("--test", type=int, metavar="N",
-                    help="mode script : collecte N secondes, rapport + JSON, quitte")
+                    help="mode script : collecte N s -> dossier horodaté "
+                         "(JSON+IQ, PNG, config.txt, figures estimateur/), puis quitte")
     args = ap.parse_args()
 
 
@@ -326,19 +423,16 @@ def main():
     rx.start()
 
     # Mode script --test N : pas de boucle interactive — collecte, rapport, exit.
-    # (Le rapport est imprimé par le thread lecteur à la 1re mesure après
-    # l'échéance ; +10 s de garde si le flux s'arrête avant.)
+    # On attend test_done (levé APRÈS l'écriture du rapport/JSON/PNG par le
+    # thread lecteur) : sinon on fermerait le processus pendant le tracé, tuant
+    # le thread daemon et perdant le PNG. +10 s de garde si le flux s'arrête.
     if args.test:
         disp.start_test(args.test)
-        deadline = time.time() + args.test + 10
         try:
-            while disp.test_until is not None and not stop.is_set() \
-                    and time.time() < deadline:
-                time.sleep(0.5)
+            if not disp.test_done.wait(timeout=args.test + 10):
+                print("[flux interrompu avant la fin du test]", file=sys.stderr)
         except KeyboardInterrupt:
             pass
-        if disp.test_until is not None:
-            print("[flux interrompu avant la fin du test]", file=sys.stderr)
         stop.set()
         ser.close()
         return

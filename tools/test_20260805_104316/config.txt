@@ -1,0 +1,334 @@
+# Snapshot config firmware — 2026-08-05 10:43:16
+# (l'overlay réellement compilé dépend du flag build.sh : --boat-n = multi, --boat-1 = single, drone = aucun)
+
+==============================================================================
+# initiator/src/cs_config.h
+==============================================================================
+#ifndef CS_CONFIG_H_
+#define CS_CONFIG_H_
+
+/*io pin trigger par une interruption pour chaque cs ranging et envoyer a la sentiboard pour avoir un timestamp */
+
+#include <zephyr/bluetooth/bluetooth.h>
+#include <zephyr/bluetooth/conn.h>
+#include <zephyr/bluetooth/cs.h>
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * 1) FAMILLE APPLICATIVE — décommenter EXACTEMENT UNE.
+ * 2) CS_NUM_BEACONS — nombre de réflecteurs (1 à 5). TOUT le timing et le
+ *    dimensionnement en découlent automatiquement (intervalle = N × créneau,
+ *    buffers, scheduler) ; garde-fous BUILD_ASSERT dans cs_config.c.
+ *
+ * Overlays prj.conf par famille (réservations SDC, indépendantes de N) :
+ *   DRONE_FAST_OUTDOOR : aucun (prj.conf de base : CS_EVENT 5000/SPACING 15000)
+ *   BOAT_DOCKING / DRONE_INDOOR, N>=2 : overlay-precision-multi.conf
+ *   BOAT_DOCKING / DRONE_INDOOR, N==1 : overlay-precision-single.conf
+ * Rappel : reflasher aussi les réflecteurs si CS_EVENT_LEN change de famille.
+ * Référence des paramètres : doc_optimised_parameters.ods (renvois Vol 6 H).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+//#define CONF_DRONE_FAST_OUTDOOR   /*drone extérieur rapide */
+#define CONF_BOAT_DOCKING /*   accostage bateau, précision courte portée */
+//- #define CONF_DRONE_INDOOR    /* drone lent intérieur, multipath dense */
+
+#define CS_NUM_BEACONS 2          /* 1..5 */
+
+/* Mode de récupération des ranging data pair : 1 = RAS temps réel (fetch ~0,
+ * pas de rétention), 0 = on-demand (fallback validé). Voir itération 3. */
+#define CS_RAS_REALTIME 1
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * FAMILLE : DRONE EXTÉRIEUR RAPIDE
+ * Priorité : cadence + robustesse au mouvement. Peu de canaux (airtime et
+ * data minimaux), créneau de 15 ms/lien, RTT sounding (levée d'ambiguïté
+ * fiable au-delà de 50 m). NOTE capacités SDC : 3C/X, 2M_2BT, sounding et
+ * NADM documentés dans l'ODS ne sont PAS supportés par le SoftDevice
+ * Controller (Create Config 0x11 constaté) — voir le bloc CS_RTT_TYPE.
+ * ───────────────────────────────────────────────────────────────────────── */
+#if defined(CONF_DRONE_FAST_OUTDOOR)
+#define CS_CHANNEL_THINNING     3     /* ~24 canaux, non-ambigu PBR 50 m */
+#define CS_SUBEVENT_LEN_US      4500
+#define CS_PROC_LEN_UNITS       40    /* 25 ms : fenêtre courte, placement facile */
+#define CS_MODE0_STEPS          2
+#define CS_MAIN_STEPS_MAX       6
+#define CS_MODE                 BT_CONN_LE_CS_MAIN_MODE_2_SUB_MODE_1 /*tester sans submode
+/* ⚠ CAPACITÉS SDC (table nrfxlib, vérifiée sur cible — Create Config 0x11
+ * sinon) : sounding sequence, CSA #3C, 2M_2BT et NADM NON SUPPORTÉS par le
+ * SoftDevice Controller. Le levier de datation RTT DISPONIBLE est la
+ * random payload (32/64/96/128 bits, supportée) : corrélation affinée vs
+ * AA-only, même rôle que la sounding d'après la spec (§2, Vol 6 Part H).
+ * Fallback validé banc : BT_CONN_LE_CS_RTT_TYPE_AA_ONLY. */
+#define CS_RTT_TYPE             BT_CONN_LE_CS_RTT_TYPE_32_BIT_RANDOM
+#define CS_SYNC_PHY             BT_CONN_LE_CS_SYNC_2M_PHY      /* 2M_2BT non supporté SDC */
+#define CS_CHSEL_TYPE           BT_CONN_LE_CS_CHSEL_TYPE_3B    /* #3C non supporté SDC */
+#define CS_CH3C_SHAPE           BT_CONN_LE_CS_CH3C_SHAPE_HAT   /* sans effet en 3B */
+#define CS_CHMAP_REPETITION     1
+#define CS_MAX_TX_POWER         BT_HCI_OP_LE_CS_MAX_MAX_TX_POWER
+#define CS_SPACING_UNITS        12    /* 15 ms/lien = ACL 3750 + CS 5000 + marge */
+#define CS_SINGLE_FLOOR_UNITS   12
+/* RAM : à 4-5 beacons, buffers réduits (24 canaux → ~30 steps réels). */
+#define CS_MAX_STEPS_PER_PROC   (CS_NUM_BEACONS >= 4 ? 48 : 64)
+#define CS_SCHED_DEFAULT_REPEAT 1
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * FAMILLE : ACCOSTAGE BATEAU (précision, < 30 m, dynamique lente)
+ * Tous les canaux = résolution max ; TX 0 dBm (anti-saturation proche) ;
+ * cible lente et proche → channel_map_repetition 2 quand la RAM le permet
+ * (N<=2, cf. note ODS), sinon moyennage par le scheduler (2 mesures/round).
+ * PBR pur (non-ambigu 150 m >> enveloppe) → pas de RTT, chsel 3B (statique).
+ * ⚠ N>=4 : thinning 2 imposé (75 m non-ambigu, RAM ~÷2 par beacon).
+ * ───────────────────────────────────────────────────────────────────────── */
+#elif defined(CONF_BOAT_DOCKING)
+#define CS_CHANNEL_THINNING     (CS_NUM_BEACONS >= 3 ? 2 : 1)
+#define CS_SUBEVENT_LEN_US      8000
+#define CS_PROC_LEN_UNITS       100   /* 62,5 ms : ~72 canaux à écouler */
+#define CS_MODE0_STEPS          3
+#define CS_MAIN_STEPS_MAX       10
+#define CS_MODE                 BT_CONN_LE_CS_MAIN_MODE_2_NO_SUB_MODE
+#define CS_RTT_TYPE             BT_CONN_LE_CS_RTT_TYPE_AA_ONLY /* sans objet en PBR pur */
+#define CS_SYNC_PHY             BT_CONN_LE_CS_SYNC_2M_PHY
+#define CS_CHSEL_TYPE           BT_CONN_LE_CS_CHSEL_TYPE_3B
+#define CS_CH3C_SHAPE           BT_CONN_LE_CS_CH3C_SHAPE_HAT   /* inutilisé en 3B */
+#define CS_CHMAP_REPETITION     (CS_NUM_BEACONS <= 2 ? 2 : 1)
+#define CS_MAX_TX_POWER         0     /* dBm */
+#define CS_SPACING_UNITS        16    /* 20 ms/lien = ACL 3750 + CS 8500 + marge */
+#define CS_SINGLE_FLOOR_UNITS   16
+#define CS_MAX_STEPS_PER_PROC   (CS_NUM_BEACONS <= 2 ? 176 : \
+                                 (CS_NUM_BEACONS == 3 ? 96 : 64))
+#define CS_SCHED_DEFAULT_REPEAT 2
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * FAMILLE : DRONE LENT INTÉRIEUR (multipath dense)
+ * La diversité fréquentielle est LE remède au multipath : tous les canaux,
+ * mode-0 renforcé, TX max (budget NLOS). Cible lente → 3B suffit ; le
+ * lissage vient du scheduler (2 mesures/round) + pondération γ côté Python.
+ * ⚠ N>=4 : thinning 2 imposé (RAM), à éviter si le multipath est sévère.
+ * ───────────────────────────────────────────────────────────────────────── */
+#elif defined(CONF_DRONE_INDOOR)
+#define CS_CHANNEL_THINNING     (CS_NUM_BEACONS >= 4 ? 2 : 1)
+#define CS_SUBEVENT_LEN_US      8000
+#define CS_PROC_LEN_UNITS       100
+#define CS_MODE0_STEPS          3
+#define CS_MAIN_STEPS_MAX       10
+#define CS_MODE                 BT_CONN_LE_CS_MAIN_MODE_2_NO_SUB_MODE
+#define CS_RTT_TYPE             BT_CONN_LE_CS_RTT_TYPE_AA_ONLY
+#define CS_SYNC_PHY             BT_CONN_LE_CS_SYNC_2M_PHY
+#define CS_CHSEL_TYPE           BT_CONN_LE_CS_CHSEL_TYPE_3B
+#define CS_CH3C_SHAPE           BT_CONN_LE_CS_CH3C_SHAPE_HAT
+#define CS_CHMAP_REPETITION     1
+#define CS_MAX_TX_POWER         BT_HCI_OP_LE_CS_MAX_MAX_TX_POWER
+#define CS_SPACING_UNITS        16
+#define CS_SINGLE_FLOOR_UNITS   16
+#define CS_MAX_STEPS_PER_PROC   (CS_NUM_BEACONS >= 4 ? 64 : 96)
+#define CS_SCHED_DEFAULT_REPEAT 2
+
+#else
+#error "cs_config.h : sélectionner exactement une famille CONF_*"
+#endif
+
+/* ── Dérivés communs (ne pas éditer) ────────────────────────────────────────
+ * Intervalle de connexion : N==1 → plancher single (le quadrillage SPACING ne
+ * s'applique qu'entre connexions centrales) ; N>=2 → N × créneau, le SDC
+ * espace les ancres ACL de SPACING (déterministe, sans collision).
+ * Startup ≈ 11 × intervalle (LL_CS_REQ/RSP/IND + marge SDC, incompressible
+ * en nombre), payé UNE FOIS à l'armement en free-running
+ *#define CS_CHANNEL_THINNING  (CS_NUM_BEACONS >= 3 ? 2 : 1) (max_procedure_count = 0). La cadence en régime établi vaut ensuite
+ * procedure_interval × intervalle de connexion par beacon (∝ N). */
+#define CS_MAX_BEACONS          CS_NUM_BEACONS
+#define CS_CONN_INTERVAL_UNITS  (CS_NUM_BEACONS == 1 ? CS_SINGLE_FLOOR_UNITS \
+                                 : CS_NUM_BEACONS * CS_SPACING_UNITS)
+#define CS_ACL_DESYNC_STEP      0  /* précession inutile avec le quadrillage ;
+                                    * fallback 6 si aborts 0x3 figés */
+
+extern struct bt_le_cs_set_default_settings_param     cs_settings;
+extern struct bt_le_cs_create_config_params           cs_create_config;
+extern struct bt_le_cs_set_procedure_parameters_param cs_proc_params;
+extern struct bt_le_conn_param                        cs_cp_active;
+/* cs_cp_standby SUPPRIMÉ : vestige round-robin actif/veille. Perspective
+ * N>=4 (note ODS sur .id/config par réflecteur) : parquer en latency les
+ * beacons hors du round courant — non implémenté. */
+
+#endif /* CS_CONFIG_H_ */
+
+==============================================================================
+# initiator/prj.conf
+==============================================================================
+# ── Bluetooth de base ──
+CONFIG_BT=y
+CONFIG_BT_CENTRAL=y
+CONFIG_BT_DEVICE_NAME="CS Initiator"
+# Doit être >= MAX_BEACONS (beacon.h)
+CONFIG_BT_MAX_CONN=5
+# CRITIQUE : même en non-bonding (BT_BONDABLE=n), chaque connexion chiffrée
+# occupe un slot du pool bt_keys (key_pool[CONFIG_BT_MAX_PAIRED]) pendant
+# toute la durée de la session — la LTK de session y vit. Défaut Zephyr = 1 :
+# dès le 2e beacon, bt_conn_set_security → bt_keys_get_addr → pool plein
+# (le seul slot appartient au beacon connecté, donc "in use", impossible à
+# purger) → -ENOMEM (-12) en boucle. parnav_cs avait cette ligne.
+CONFIG_BT_MAX_PAIRED=5
+
+# ── Sécurité (BT_SECURITY_L2, Just Works) ──
+CONFIG_BT_SMP=y
+# Pas de bonding : sans CONFIG_BT_SETTINGS les clés ne survivent pas au
+# reboot, et des bonds RAM périmés cassent la re-sécurisation (err 2
+# PIN_OR_KEY_MISSING) et saturent le pool de clés (-ENOMEM). La sécurité
+# CS n'exige qu'un lien chiffré : pairing par session, sans stockage.
+CONFIG_BT_BONDABLE=n
+
+# ── Scan NCS (filtre UUID + connexion auto) ──
+CONFIG_BT_SCAN=y
+CONFIG_BT_SCAN_FILTER_ENABLE=y
+CONFIG_BT_SCAN_UUID_CNT=1
+
+# ── Client GATT + découverte de service (RAS) ──
+CONFIG_BT_GATT_CLIENT=y
+CONFIG_BT_GATT_DM=y
+
+# ── Channel Sounding ──
+CONFIG_BT_CHANNEL_SOUNDING=y
+# Un contexte CS par connexion au niveau contrôleur : sans ça (défaut = 1),
+# le setup CS du 2e réflecteur échoue faute de ressources
+CONFIG_BT_CTLR_SDC_CS_COUNT=5
+# Durée RÉSERVÉE par le SDC dans la timeline pour chaque événement CS
+# (défaut = 5000 µs). Doit être >= max_subevent_len (4500 µs dans
+# cs_config.c), sinon HCI 0x12 au Set Procedure Parameters.
+# ⚠ C'est une RÉSERVATION de scheduling : 16000 gonflait l'empreinte de
+# chaque créneau CS → le SDC ne trouvait pas de placement sous ~50-60 ms
+# d'intervalle (0x0c) et différait le 1er subevent (startup ~700 ms).
+# 5000 = 4500 + marge, colle à l'airtime réel (~10 ms de mesure utile).
+CONFIG_BT_CTLR_SDC_CS_EVENT_LEN_DEFAULT=5000
+
+# ── Compactage du scheduling central (LE GOULOT des ~700 ms) ──
+# Quand BT_CTLR_CHANNEL_SOUNDING=y, le SDC espace par DÉFAUT les ancres ACL
+# des connexions centrales de 90000 µs (90 ms !) pour caser un événement CS
+# derrière chaque ACL. Avec 2 liens à 60/77,5 ms d'intervalle, ce quadrillage
+# 90 ms est intenable : le SDC diffère le 1er subevent CS jusqu'à trouver un
+# créneau (~10-13 événements de connexion) et refuse les intervalles courts.
+# On le redimensionne à nos empreintes réelles :
+#   ACL (3750) + événement CS (5000) + marge ≈ 15000 µs par lien.
+# 2 liens × 15 ms = 30 ms → intervalle de connexion 24 (30 ms).
+# ⚠ TESTÉ 10000/intervalle 16 : abort 0x3 systématique sur les 2 beacons —
+#   1250 µs de marge par créneau est insuffisant (retransmissions ACL,
+#   glissements). 15000 validé : startup 340 ms, fetch 130-180 ms, 0 abort.
+#   Étape intermédiaire possible à valider : 12500 + intervalle 20 (25 ms).
+CONFIG_BT_CTLR_SDC_CENTRAL_ACL_EVENT_SPACING_DEFAULT=15000
+# Réservation ACL par lien : 7500 µs par défaut, ramenée à 3750. L'extension
+# d'événement (CONFIG_BT_CTLR_SDC_CONN_EVENT_EXTEND_DEFAULT=y par défaut)
+# rallonge opportunément l'événement quand il reste des données (fetch RAS)
+# et pas de conflit : le débit GATT ne s'effondre pas.
+CONFIG_BT_CTLR_SDC_MAX_CONN_EVENT_LEN_DEFAULT=3750
+# Un buffer de réassemblage host par connexion CS active (clé = conn_handle,
+# libéré seulement à la déconnexion ou en fin de procédure). Défaut = 1 :
+# un buffer résiduel d'une procédure avortée sur un lien peut affamer
+# l'autre lien. Aligner sur MAX_BEACONS (beacon.h) — CRITIQUE en free-running
+# (max_procedure_count=0) : les N liens produisent des procédures en
+# parallèle en permanence. 5 = CONFIG_BT_MAX_CONN (couvre tous les profils).
+CONFIG_BT_CHANNEL_SOUNDING_REASSEMBLY_BUFFER_CNT=5
+# Permet à CS et ACL d'utiliser des PHY différents (présent dans le
+# sample mono-beacon validé)
+CONFIG_BT_TRANSMIT_POWER_CONTROL=y
+
+# ── Ranging Service : client (Ranging REQuestor) ──
+CONFIG_BT_RAS=y
+CONFIG_BT_RAS_RREQ=y
+
+# ── MTU/ACL : transfert rapide des ranging data ──
+CONFIG_BT_L2CAP_TX_MTU=247
+CONFIG_BT_BUF_ACL_TX_SIZE=251
+CONFIG_BT_BUF_ACL_RX_SIZE=251
+CONFIG_BT_ATT_PREPARE_COUNT=2
+
+# ── Flottants (atan2f, régression) ──
+CONFIG_FPU=y
+# Plusieurs threads utilisent la FPU (ranging dans main + display_thread
+# qui logge des floats) : sans FPU_SHARING les registres FPU sont corrompus
+# au changement de contexte
+CONFIG_FPU_SHARING=y
+# Formatage des %f dans LOG_INF (sinon affichage corrompu)
+CONFIG_CBPRINTF_FP_SUPPORT=y
+
+# ── Divers ──
+CONFIG_DK_LIBRARY=y
+CONFIG_SERIAL=y
+CONFIG_LOG=y
+CONFIG_MAIN_STACK_SIZE=4096
+CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=4096
+
+# ── RTT : buffer élargi pour ne pas perdre les logs de boot avant
+#    l'attachement du terminal JLink (défaut = 1 Ko, mode skip) ──
+CONFIG_USE_SEGGER_RTT=y
+CONFIG_LOG_BACKEND_RTT=y
+CONFIG_SEGGER_RTT_BUFFER_SIZE_UP=4096
+CONFIG_UART_INTERRUPT_DRIVEN=y
+
+==============================================================================
+# initiator/overlay-precision-multi.conf
+==============================================================================
+# Profils CONF_DOCKING_PRECISION / CONF_INDOOR_PRECISION avec CS_NUM_REFLECTORS=2
+# Subevent 8000 µs → réservation CS 8500 ; quadrillage :
+#   SPACING >= ACL 3750 + CS 8500 + garde >= 3000  → 20000
+#   intervalle = 2 × 20000 = 40 ms (CS_CONN_INTERVAL_UNITS=32 dans le profil)
+CONFIG_BT_CTLR_SDC_CS_EVENT_LEN_DEFAULT=8500
+CONFIG_BT_CTLR_SDC_CENTRAL_ACL_EVENT_SPACING_DEFAULT=20000
+# Côté RÉFLECTEURS : reporter CS_EVENT_LEN_DEFAULT=8500.
+
+==============================================================================
+# initiator/overlay-precision-single.conf
+==============================================================================
+# Profils CONF_DOCKING_PRECISION / CONF_INDOOR_PRECISION avec CS_NUM_REFLECTORS=1
+CONFIG_BT_CTLR_SDC_CS_EVENT_LEN_DEFAULT=8500
+# Un seul lien central : SPACING sans effet, laissé au défaut.
+# Côté RÉFLECTEUR : reporter CS_EVENT_LEN_DEFAULT=8500.
+
+==============================================================================
+# reflector/prj.conf
+==============================================================================
+# ── Bluetooth de base ──
+CONFIG_BT=y
+CONFIG_BT_PERIPHERAL=y
+CONFIG_BT_DEVICE_NAME="CS Reflector"
+# Un seul initiateur servi à la fois
+CONFIG_BT_MAX_CONN=1
+
+# ── Sécurité (répond au BT_SECURITY_L2 de l'initiateur) ──
+CONFIG_BT_SMP=y
+# Pas de bonding : sans CONFIG_BT_SETTINGS les clés ne survivent pas au
+# reboot, et des bonds RAM périmés cassent la re-sécurisation (err 2
+# PIN_OR_KEY_MISSING) et saturent le pool de clés (-ENOMEM). La sécurité
+# CS n'exige qu'un lien chiffré : pairing par session, sans stockage.
+CONFIG_BT_BONDABLE=n
+
+# ── Channel Sounding ──
+CONFIG_BT_CHANNEL_SOUNDING=y
+# Aligné sur l'initiateur : réservation d'événement CS >= max_subevent_len
+# négocié. DOIT SUIVRE LA FAMILLE DE PROFIL de l'initiateur (cs_config.h) :
+#   DRONE_FAST_OUTDOOR (subevent 4500) -> 5000
+#   DRONE_INDOOR / BOAT_DOCKING (subevent 8000, overlay precision) -> 8500
+# Reflasher les réflecteurs à chaque changement de famille.
+CONFIG_BT_CTLR_SDC_CS_EVENT_LEN_DEFAULT=8500
+# Permet à CS et ACL d'utiliser des PHY différents (sample validé)
+CONFIG_BT_TRANSMIT_POWER_CONTROL=y
+# L'initiateur rejette les demandes de mise à jour de paramètres
+# (le_param_req → false) : on n'en émet pas (évite le bruit, sample validé)
+CONFIG_BT_GAP_AUTO_UPDATE_CONN_PARAMS=n
+
+# ── Ranging Service : serveur (Ranging ReSPonder) ──
+CONFIG_BT_RAS=y
+CONFIG_BT_RAS_RRSP=y
+# Rétention : garder 10 procédures (au lieu de 1) pour que l'initiateur en mode
+# CONTINU ait le temps de récupérer un compteur avant qu'il soit écrasé.
+CONFIG_BT_RAS_RRSP_RD_BUFFERS_PER_CONN=10
+
+# ── MTU/ACL alignés sur l'initiateur ──
+CONFIG_BT_L2CAP_TX_MTU=247
+CONFIG_BT_BUF_ACL_TX_SIZE=251
+CONFIG_BT_BUF_ACL_RX_SIZE=251
+
+# ── Divers ──
+CONFIG_DK_LIBRARY=y
+CONFIG_LOG=y
+
+# ── RTT : buffer élargi pour ne pas perdre les logs de boot avant
+#    l'attachement du terminal JLink (1 Ko par défaut, mode skip) ──
+CONFIG_USE_SEGGER_RTT=y
+CONFIG_LOG_BACKEND_RTT=y
+CONFIG_SEGGER_RTT_BUFFER_SIZE_UP=4096
