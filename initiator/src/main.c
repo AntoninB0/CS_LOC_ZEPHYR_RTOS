@@ -11,7 +11,7 @@
 #include "pairing.h"
 #include "cs_ranging.h"
 #include "if.h"
-#include "scheduler.h"
+#include "manager.h"
 #include "cs_config.h"
 
 #include <dk_buttons_and_leds.h>
@@ -46,6 +46,14 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
 
 	/* Reject duplicate connection to already-connected beacon */
 	const bt_addr_le_t *addr_le = bt_conn_get_dst(conn);
+
+	/* Whitelist manager : rejette toute adresse hors liste quand la
+	 * whitelist est active (WL:ON). Toujours OK si désactivée. */
+	if (!manager_addr_allowed(addr_le)) {
+		LOG_WRN("Connection rejected (not whitelisted): %s", addr);
+		bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+		return;
+	}
 
 	k_mutex_lock(&beacons_mutex, K_FOREVER);
 	for (int i = 0; i < MAX_BEACONS; i++) {
@@ -204,10 +212,10 @@ int main(void)
 		LOG_ERR("UART init failed");
 	}
 
-	/* Scheduler de mesures : ordre de passage AUTO (erreur min privilégiée)
-	 * ou imposé par UART ("ORDER:0,1,1" / "AUTO", voir scheduler.h). */
-	scheduler_init();
-	if_set_line_cb(scheduler_uart_line);
+	/* Manager applicatif : commandes UART (IQON/IQOFF, whitelist, chmap),
+	 * filtrage des connexions par whitelist, préparation du hot-swap chmap. */
+	manager_init();
+	if_set_line_cb(manager_uart_line);
 
 	err = bt_enable(NULL);
 	if (err) {
@@ -253,27 +261,16 @@ int main(void)
 	cs_ranging_init();
 
 	bool armed[MAX_BEACONS] = { false };
-	uint8_t seq[SCHED_ROUND_MAX];
 
 	while (true) {
 		bool enable_failed = false;
+		bool any_collected = false;
 		int64_t t_cycle = k_uptime_get();
 
-		/* Le scheduler fournit l'ordre de passage du round : indices de
-		 * beacons prêts, répétitions permises. AUTO : un slot par
-		 * beacon prêt ; MANUAL : ordre UART. */
-		int len = scheduler_build_round(seq);
-
-		if (len == 0) {
-			for (int i = 0; i < MAX_BEACONS; i++) {
-				armed[i] = false;
-			}
-			k_sleep(K_MSEC(50));
-			continue;
-		}
-
-		for (int k = 0; k < len; k++) {
-			int  i = seq[k];
+		/* Round-robin simple sur tous les beacons (le scheduler a été
+		 * retiré : en free-running chaque lien mesure en continu, l'ordre
+		 * n'a pas d'effet sur la cadence). */
+		for (int i = 0; i < MAX_BEACONS; i++) {
 			bool ready;
 
 			k_mutex_lock(&beacons_mutex, K_FOREVER);
@@ -304,12 +301,11 @@ int main(void)
 			bool rearmed = true;
 			int rc = cs_collect_beacon(i, &rearmed);
 
+			any_collected = true;
 			if (!rearmed) {
 				armed[i] = false;
 				enable_failed = true;
 			}
-			scheduler_report(i, rc == 0);
-
 			if (rc != 0) {
 				LOG_WRN("Beacon[%d] ranging failed", i);
 			}
@@ -317,10 +313,10 @@ int main(void)
 
 		LOG_INF("cycle: %lld ms", k_uptime_get() - t_cycle);
 
-		if (enable_failed) {
-			/* Backoff uniquement en dégradé (enable refusé) : en
-			 * nominal la boucle est cadencée par les sémaphores de
-			 * collecte, pas par un sleep. */
+		/* Backoff si rien n'a été collecté ce tour (tous déconnectés ou
+		 * juste armés) : évite un spin à vide. En nominal, la boucle est
+		 * cadencée par les sémaphores de collecte (cs_collect_beacon). */
+		if (enable_failed || !any_collected) {
 			k_sleep(K_MSEC(50));
 		}
 	}

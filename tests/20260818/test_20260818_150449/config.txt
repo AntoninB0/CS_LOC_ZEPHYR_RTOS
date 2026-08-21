@@ -1,9 +1,13 @@
+# Snapshot config firmware — 2026-08-18 15:04:49
+# (l'overlay réellement compilé dépend du flag build.sh : --boat-n = multi, --boat-1 = single, drone = aucun)
+
+==============================================================================
+# initiator/src/cs_config.h
+==============================================================================
 #ifndef CS_CONFIG_H_
 #define CS_CONFIG_H_
 
 /*io pin trigger par une interruption pour chaque cs ranging et envoyer a la sentiboard pour avoir un timestamp */
-//ajouter une whitelist a la connexion si possible pouvant etre changée par un manager
-
 
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
@@ -74,7 +78,7 @@
  * ⚠ N>=4 : thinning 2 imposé (75 m non-ambigu, RAM ~÷2 par beacon).
  * ───────────────────────────────────────────────────────────────────────── */
 #elif defined(CONF_BOAT_DOCKING)
-#define CS_CHANNEL_THINNING     (CS_NUM_BEACONS >= 3 ? 2 : 1) //voir pour faire un 'hot swap de la chmap par exemple via un controlleur externe' check si ca demande un restart de la procedure 
+#define CS_CHANNEL_THINNING     (CS_NUM_BEACONS >= 3 ? 2 : 1)
 #define CS_SUBEVENT_LEN_US      8000
 #define CS_PROC_LEN_UNITS       100   /* 62,5 ms : ~72 canaux à écouler */
 #define CS_MODE0_STEPS          3
@@ -157,3 +161,187 @@ extern struct bt_le_conn_param                        cs_cp_active;
  * beacons hors du round courant — non implémenté. */
 
 #endif /* CS_CONFIG_H_ */
+
+==============================================================================
+# initiator/prj.conf
+==============================================================================
+# ── Bluetooth de base ──
+CONFIG_BT=y
+CONFIG_BT_CENTRAL=y
+CONFIG_BT_DEVICE_NAME="CS Initiator"
+# Doit être >= MAX_BEACONS (beacon.h)
+CONFIG_BT_MAX_CONN=5
+# CRITIQUE : même en non-bonding (BT_BONDABLE=n), chaque connexion chiffrée
+# occupe un slot du pool bt_keys (key_pool[CONFIG_BT_MAX_PAIRED]) pendant
+# toute la durée de la session — la LTK de session y vit. Défaut Zephyr = 1 :
+# dès le 2e beacon, bt_conn_set_security → bt_keys_get_addr → pool plein
+# (le seul slot appartient au beacon connecté, donc "in use", impossible à
+# purger) → -ENOMEM (-12) en boucle. parnav_cs avait cette ligne.
+CONFIG_BT_MAX_PAIRED=5
+
+# ── Sécurité (BT_SECURITY_L2, Just Works) ──
+CONFIG_BT_SMP=y
+# Pas de bonding : sans CONFIG_BT_SETTINGS les clés ne survivent pas au
+# reboot, et des bonds RAM périmés cassent la re-sécurisation (err 2
+# PIN_OR_KEY_MISSING) et saturent le pool de clés (-ENOMEM). La sécurité
+# CS n'exige qu'un lien chiffré : pairing par session, sans stockage.
+CONFIG_BT_BONDABLE=n
+
+# ── Scan NCS (filtre UUID + connexion auto) ──
+CONFIG_BT_SCAN=y
+CONFIG_BT_SCAN_FILTER_ENABLE=y
+CONFIG_BT_SCAN_UUID_CNT=1
+
+# ── Client GATT + découverte de service (RAS) ──
+CONFIG_BT_GATT_CLIENT=y
+CONFIG_BT_GATT_DM=y
+
+# ── Channel Sounding ──
+CONFIG_BT_CHANNEL_SOUNDING=y
+# Un contexte CS par connexion au niveau contrôleur : sans ça (défaut = 1),
+# le setup CS du 2e réflecteur échoue faute de ressources
+CONFIG_BT_CTLR_SDC_CS_COUNT=5
+# Durée RÉSERVÉE par le SDC dans la timeline pour chaque événement CS
+# (défaut = 5000 µs). Doit être >= max_subevent_len (4500 µs dans
+# cs_config.c), sinon HCI 0x12 au Set Procedure Parameters.
+# ⚠ C'est une RÉSERVATION de scheduling : 16000 gonflait l'empreinte de
+# chaque créneau CS → le SDC ne trouvait pas de placement sous ~50-60 ms
+# d'intervalle (0x0c) et différait le 1er subevent (startup ~700 ms).
+# 5000 = 4500 + marge, colle à l'airtime réel (~10 ms de mesure utile).
+CONFIG_BT_CTLR_SDC_CS_EVENT_LEN_DEFAULT=5000
+
+# ── Compactage du scheduling central (LE GOULOT des ~700 ms) ──
+# Quand BT_CTLR_CHANNEL_SOUNDING=y, le SDC espace par DÉFAUT les ancres ACL
+# des connexions centrales de 90000 µs (90 ms !) pour caser un événement CS
+# derrière chaque ACL. Avec 2 liens à 60/77,5 ms d'intervalle, ce quadrillage
+# 90 ms est intenable : le SDC diffère le 1er subevent CS jusqu'à trouver un
+# créneau (~10-13 événements de connexion) et refuse les intervalles courts.
+# On le redimensionne à nos empreintes réelles :
+#   ACL (3750) + événement CS (5000) + marge ≈ 15000 µs par lien.
+# 2 liens × 15 ms = 30 ms → intervalle de connexion 24 (30 ms).
+# ⚠ TESTÉ 10000/intervalle 16 : abort 0x3 systématique sur les 2 beacons —
+#   1250 µs de marge par créneau est insuffisant (retransmissions ACL,
+#   glissements). 15000 validé : startup 340 ms, fetch 130-180 ms, 0 abort.
+#   Étape intermédiaire possible à valider : 12500 + intervalle 20 (25 ms).
+CONFIG_BT_CTLR_SDC_CENTRAL_ACL_EVENT_SPACING_DEFAULT=15000
+# Réservation ACL par lien : 7500 µs par défaut, ramenée à 3750. L'extension
+# d'événement (CONFIG_BT_CTLR_SDC_CONN_EVENT_EXTEND_DEFAULT=y par défaut)
+# rallonge opportunément l'événement quand il reste des données (fetch RAS)
+# et pas de conflit : le débit GATT ne s'effondre pas.
+CONFIG_BT_CTLR_SDC_MAX_CONN_EVENT_LEN_DEFAULT=3750
+# Un buffer de réassemblage host par connexion CS active (clé = conn_handle,
+# libéré seulement à la déconnexion ou en fin de procédure). Défaut = 1 :
+# un buffer résiduel d'une procédure avortée sur un lien peut affamer
+# l'autre lien. Aligner sur MAX_BEACONS (beacon.h) — CRITIQUE en free-running
+# (max_procedure_count=0) : les N liens produisent des procédures en
+# parallèle en permanence. 5 = CONFIG_BT_MAX_CONN (couvre tous les profils).
+CONFIG_BT_CHANNEL_SOUNDING_REASSEMBLY_BUFFER_CNT=5
+# Permet à CS et ACL d'utiliser des PHY différents (présent dans le
+# sample mono-beacon validé)
+CONFIG_BT_TRANSMIT_POWER_CONTROL=y
+
+# ── Ranging Service : client (Ranging REQuestor) ──
+CONFIG_BT_RAS=y
+CONFIG_BT_RAS_RREQ=y
+
+# ── MTU/ACL : transfert rapide des ranging data ──
+CONFIG_BT_L2CAP_TX_MTU=247
+CONFIG_BT_BUF_ACL_TX_SIZE=251
+CONFIG_BT_BUF_ACL_RX_SIZE=251
+CONFIG_BT_ATT_PREPARE_COUNT=2
+
+# ── Flottants (atan2f, régression) ──
+CONFIG_FPU=y
+# Plusieurs threads utilisent la FPU (ranging dans main + display_thread
+# qui logge des floats) : sans FPU_SHARING les registres FPU sont corrompus
+# au changement de contexte
+CONFIG_FPU_SHARING=y
+# Formatage des %f dans LOG_INF (sinon affichage corrompu)
+CONFIG_CBPRINTF_FP_SUPPORT=y
+
+# ── Divers ──
+CONFIG_DK_LIBRARY=y
+CONFIG_SERIAL=y
+CONFIG_LOG=y
+CONFIG_MAIN_STACK_SIZE=4096
+CONFIG_SYSTEM_WORKQUEUE_STACK_SIZE=4096
+
+# ── RTT : buffer élargi pour ne pas perdre les logs de boot avant
+#    l'attachement du terminal JLink (défaut = 1 Ko, mode skip) ──
+CONFIG_USE_SEGGER_RTT=y
+CONFIG_LOG_BACKEND_RTT=y
+CONFIG_SEGGER_RTT_BUFFER_SIZE_UP=4096
+CONFIG_UART_INTERRUPT_DRIVEN=y
+
+==============================================================================
+# initiator/overlay-precision-multi.conf
+==============================================================================
+# Profils CONF_DOCKING_PRECISION / CONF_INDOOR_PRECISION avec CS_NUM_REFLECTORS=2
+# Subevent 8000 µs → réservation CS 8500 ; quadrillage :
+#   SPACING >= ACL 3750 + CS 8500 + garde >= 3000  → 20000
+#   intervalle = 2 × 20000 = 40 ms (CS_CONN_INTERVAL_UNITS=32 dans le profil)
+CONFIG_BT_CTLR_SDC_CS_EVENT_LEN_DEFAULT=8500
+CONFIG_BT_CTLR_SDC_CENTRAL_ACL_EVENT_SPACING_DEFAULT=20000
+# Côté RÉFLECTEURS : reporter CS_EVENT_LEN_DEFAULT=8500.
+
+==============================================================================
+# initiator/overlay-precision-single.conf
+==============================================================================
+# Profils CONF_DOCKING_PRECISION / CONF_INDOOR_PRECISION avec CS_NUM_REFLECTORS=1
+CONFIG_BT_CTLR_SDC_CS_EVENT_LEN_DEFAULT=8500
+# Un seul lien central : SPACING sans effet, laissé au défaut.
+# Côté RÉFLECTEUR : reporter CS_EVENT_LEN_DEFAULT=8500.
+
+==============================================================================
+# reflector/prj.conf
+==============================================================================
+# ── Bluetooth de base ──
+CONFIG_BT=y
+CONFIG_BT_PERIPHERAL=y
+CONFIG_BT_DEVICE_NAME="CS Reflector"
+# Un seul initiateur servi à la fois
+CONFIG_BT_MAX_CONN=1
+
+# ── Sécurité (répond au BT_SECURITY_L2 de l'initiateur) ──
+CONFIG_BT_SMP=y
+# Pas de bonding : sans CONFIG_BT_SETTINGS les clés ne survivent pas au
+# reboot, et des bonds RAM périmés cassent la re-sécurisation (err 2
+# PIN_OR_KEY_MISSING) et saturent le pool de clés (-ENOMEM). La sécurité
+# CS n'exige qu'un lien chiffré : pairing par session, sans stockage.
+CONFIG_BT_BONDABLE=n
+
+# ── Channel Sounding ──
+CONFIG_BT_CHANNEL_SOUNDING=y
+# Aligné sur l'initiateur : réservation d'événement CS >= max_subevent_len
+# négocié. DOIT SUIVRE LA FAMILLE DE PROFIL de l'initiateur (cs_config.h) :
+#   DRONE_FAST_OUTDOOR (subevent 4500) -> 5000
+#   DRONE_INDOOR / BOAT_DOCKING (subevent 8000, overlay precision) -> 8500
+# Reflasher les réflecteurs à chaque changement de famille.
+CONFIG_BT_CTLR_SDC_CS_EVENT_LEN_DEFAULT=8500
+# Permet à CS et ACL d'utiliser des PHY différents (sample validé)
+CONFIG_BT_TRANSMIT_POWER_CONTROL=y
+# L'initiateur rejette les demandes de mise à jour de paramètres
+# (le_param_req → false) : on n'en émet pas (évite le bruit, sample validé)
+CONFIG_BT_GAP_AUTO_UPDATE_CONN_PARAMS=n
+
+# ── Ranging Service : serveur (Ranging ReSPonder) ──
+CONFIG_BT_RAS=y
+CONFIG_BT_RAS_RRSP=y
+# Rétention : garder 10 procédures (au lieu de 1) pour que l'initiateur en mode
+# CONTINU ait le temps de récupérer un compteur avant qu'il soit écrasé.
+CONFIG_BT_RAS_RRSP_RD_BUFFERS_PER_CONN=10
+
+# ── MTU/ACL alignés sur l'initiateur ──
+CONFIG_BT_L2CAP_TX_MTU=247
+CONFIG_BT_BUF_ACL_TX_SIZE=251
+CONFIG_BT_BUF_ACL_RX_SIZE=251
+
+# ── Divers ──
+CONFIG_DK_LIBRARY=y
+CONFIG_LOG=y
+
+# ── RTT : buffer élargi pour ne pas perdre les logs de boot avant
+#    l'attachement du terminal JLink (1 Ko par défaut, mode skip) ──
+CONFIG_USE_SEGGER_RTT=y
+CONFIG_LOG_BACKEND_RTT=y
+CONFIG_SEGGER_RTT_BUFFER_SIZE_UP=4096

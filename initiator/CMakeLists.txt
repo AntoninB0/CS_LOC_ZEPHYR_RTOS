@@ -10,7 +10,7 @@ target_sources(app PRIVATE
 	src/pairing.c
 	src/cs_ranging.c
 	src/if.c
-	src/scheduler.c
+	src/manager.c
 )
 
 target_include_directories(app PRIVATE src)

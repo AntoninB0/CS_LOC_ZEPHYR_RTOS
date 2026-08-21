@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "if.h"
+#include "manager.h"
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
@@ -421,6 +422,15 @@ static void rd_get_complete_cb(struct bt_conn *conn, uint16_t ranging_counter, i
 
 static void cs_build_channel_map(uint8_t channel_map[10])
 {
+	/* Le manager a-t-il imposé une channel map (CHMAP:* via UART) ? Si oui
+	 * elle prime sur la map compile-time du profil. Prend effet à CETTE
+	 * création de config ; pour un hot-swap live il faut re-créer la config
+	 * en cours de connexion (redémarrage de procédure). */
+	if (manager_get_chmap(channel_map)) {
+		LOG_INF("CS channel map: fournie par le manager");
+		return;
+	}
+
 	bt_le_cs_set_valid_chmap_bits(channel_map);
 
 #if CS_CHANNEL_THINNING > 1
@@ -780,7 +790,7 @@ int cs_enable_beacon(int i)
 	return err;
 }
 
-/* ── Dump IQ vers l'UART data (lignes ASCII, format doc IQ_DUMP.md) ─────────
+/* ── Dump IQ vers l'UART data (lignes ASCII, format doc GUIDE.md) ─────────
  * IQL,<beacon>,<counter>,<t_ms_subevent>,<hex steps du subevent>  (× subevents)
  * IQP,<beacon>,<counter>,<t_ms_done>,<hex ranging data RAS du pair>
  * Émis depuis le thread de mesure APRÈS le fetch : n'ajoute que le temps

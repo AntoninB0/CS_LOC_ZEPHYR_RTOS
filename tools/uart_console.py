@@ -131,6 +131,8 @@ class Display:
         self.test_data = {}         # {beacon: [enregistrements dict]}
         self.test_done = threading.Event()  # levé quand rapport+JSON+PNG écrits
         self.show_distances = False # ligne par mesure masquée par défaut (:show)
+        self.note = ""              # label de config du test (--note / :note),
+                                    # écrit dans le JSON -> étiquette les comparaisons
 
     def start_test(self, secs: int):
         self.test_data = {}
@@ -169,7 +171,11 @@ class Display:
         """Fin de fenêtre : imprime le rapport et sauve données+rapport en JSON."""
         rapport = self._build_report()
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        outdir = f"test_{stamp}"                    # dossier horodaté du test
+        day = stamp[:8]                             # AAAAMMJJ
+        # Tous les tests sont rangés dans <repo>/tests/AAAAMMJJ/ quel que soit
+        # le répertoire de lancement (chemin ancré sur l'emplacement du script).
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        outdir = os.path.join(repo, "tests", day, f"test_{stamp}")
         os.makedirs(outdir, exist_ok=True)
         fname = os.path.join(outdir, f"test_{stamp}.json")
         try:      # traçabilité : offsets de calibration actifs pendant ce test
@@ -180,6 +186,7 @@ class Display:
             cal = None
         doc = {
             "date": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "note": self.note,                    # label de config (étiquette compare)
             "duree_s": self.test_secs,
             "calibration": cal,
             "rapport": rapport,
@@ -206,7 +213,8 @@ class Display:
                   file=sys.stderr, flush=True)
             cfg = None
         png = self._plot(fname.replace(".json", ".png"))
-        est_figs = self._plot_estimator(outdir)   # IFFT/bayésien par beacon
+        est_figs = self._plot_estimator(outdir)     # IFFT/bayésien par beacon
+        cons_figs = self._plot_consistency(outdir)  # rapport consistance IQ par beacon
         contenu = ["test_%s.json" % stamp]
         if png:
             contenu.append("test_%s.png" % stamp)
@@ -214,7 +222,10 @@ class Display:
             contenu.append("config.txt")
         if est_figs:
             contenu.append(f"estimateur/ ({len(est_figs)} fig)")
-        print(f"[dossier -> {outdir}/ : " + ", ".join(contenu) + "]\n", flush=True)
+        if cons_figs:
+            contenu.append(f"consistency_b* ({len(cons_figs)})")
+        short = os.path.join("tests", day, f"test_{stamp}")   # affichage court
+        print(f"[dossier -> {short}/ : " + ", ".join(contenu) + "]\n", flush=True)
 
     def _plot_estimator(self, outdir):
         """Figures IFFT + vraisemblance bayésienne (incertitude / multipath)
@@ -247,6 +258,30 @@ class Display:
                 except Exception as e:
                     print(f"[fig estimateur b{b} {tag} en échec : "
                           f"{type(e).__name__}: {e}]", file=sys.stderr, flush=True)
+        return made
+
+    def _plot_consistency(self, outdir):
+        """Rapport de consistance IQ (cohérence par canal, top-X%, stationnarité)
+        par beacon, écrit dans le dossier du test. Réutilise iq_consistency.
+        Best-effort. Renvoie la liste des PNG (consistency_bX.png)."""
+        try:
+            import iq_consistency as ic
+        except Exception as e:
+            print(f"[rapport consistance indisponible : {type(e).__name__}: {e}]",
+                  file=sys.stderr, flush=True)
+            return []
+        label = self.note or f"test_{time.strftime('%Y%m%d_%H%M%S')}"
+        results, made = {}, []
+        for b, recs in self.test_data.items():
+            results[(label, b)] = ic.consistency(recs)
+        for b in sorted(self.test_data):
+            try:
+                out = os.path.join(outdir, f"consistency_b{b}.png")
+                ic.report_figure(results, [label], b, out)
+                made.append(out)
+            except Exception as e:
+                print(f"[rapport consistance b{b} en échec : "
+                      f"{type(e).__name__}: {e}]", file=sys.stderr, flush=True)
         return made
 
     def _plot(self, fname):
@@ -317,7 +352,10 @@ class Display:
                 and d is not None:
             self.test_data.setdefault(m.beacon, []).append({
                 "counter": m.counter,
-                "t_ms": m.t_ms,
+                "t_ms": m.t_ms,                       # k_uptime 1er subevent (ms)
+                "t_done_ms": getattr(m, "t_done_ms", None),   # fin de procédure
+                "n_subevents": getattr(m, "n_subevents", None),
+                # -> durée de procédure = t_done_ms - t_ms  (le `meas` des logs)
                 "d_m": round(float(d), 4),
                 "d_brut_m": round(d_brut, 4) if d_brut is not None else None,
                 "rssi_loc": m.rssi_loc,
@@ -396,6 +434,9 @@ def main():
     ap.add_argument("--test", type=int, metavar="N",
                     help="mode script : collecte N s -> dossier horodaté "
                          "(JSON+IQ, PNG, config.txt, figures estimateur/), puis quitte")
+    ap.add_argument("--note", default="", metavar="LABEL",
+                    help="label de config du test (ex. 'boat_thin1_5m_N1') "
+                         "écrit dans le JSON -> étiquette les courbes de comparaison")
     args = ap.parse_args()
 
 
@@ -414,6 +455,7 @@ def main():
         sys.exit(f"Ouverture de {args.port} impossible : {e}")
 
     disp = Display()
+    disp.note = args.note                         # label de config (--note)
     print(f"[connecté à {args.port} @ {args.baud} bauds]  une ligne par mesure  |  "
           f"IQON/IQOFF/AUTO/ORDER pour le firmware  |  :raw :stats :reload :q",
           file=sys.stderr, flush=True)
@@ -475,6 +517,10 @@ def main():
                 except (ValueError, ImportError):
                     print("[usage : :cal | :cal <offset_m> | :cal <beacon> <offset_m>]",
                           file=sys.stderr, flush=True)
+                continue
+            if cmd.split()[0] == ":note":
+                disp.note = cmd[len(":note"):].strip()
+                print(f"[note de test = '{disp.note}']", file=sys.stderr, flush=True)
                 continue
             if cmd == ":show":
                 disp.show_distances = True

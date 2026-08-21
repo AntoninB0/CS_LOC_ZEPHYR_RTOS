@@ -30,7 +30,7 @@ void cs_ranging_init(void);
  * en fond, la cadence par beacon = procedure_interval × intervalle de
  * connexion (mesures non collectées à temps : écrasées, pas accumulées). */
 /* Dump IQ horodaté vers l'UART data (ON par défaut, désactivable par commande
- * UART IQOFF/réactivable IQON, format des lignes documenté dans IQ_DUMP.md). */
+ * UART IQOFF/réactivable IQON, format des lignes documenté dans GUIDE.md). */
 extern bool cs_iq_dump;
 
 int cs_enable_beacon(int i);

@@ -54,11 +54,11 @@ GAMMA     = 1.0     # ~SNR linéaire du modèle von Mises (1 = neutre)
 R_MAX     = 50.0    # m — alias grossier c/(2·3 MHz) : au-delà, repli du spectre
 MIN_TONES = 5       # en-deçà, la mesure ne vaut rien (MATLAB : 2)
 
-# ── Calibration (à renseigner via la série au ruban — CHECKLIST_TESTS.md) ────
+# ── Calibration (à renseigner via la série au ruban — doc/CHECKLIST_TESTS.md) ─
 # Offsets SOUSTRAITS à la sortie : d_affichée = d_mesurée - global - beacon.
 # Réglables en live depuis la console (:cal / :cal <m> / :cal <beacon> <m>) —
 # ⚠ un :reload recharge ce fichier et revient aux valeurs écrites ici.
-CAL_OFFSET_M = 0.0            # biais commun (délais de groupe initiateur)
+CAL_OFFSET_M = 0.80           # biais commun (group delay) — calibré au ruban
 CAL_OFFSET_PAR_BEACON = {}    # ex. {0: 0.35, 2: -0.10} — s'ajoute au global
 
 # Distance de la DERNIÈRE mesure AVANT la médiane glissante (calibrée), lue
