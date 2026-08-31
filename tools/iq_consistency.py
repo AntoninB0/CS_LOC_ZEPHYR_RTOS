@@ -38,8 +38,6 @@ def consistency(recs, min_samples=20):
     """recs (list of measurement dicts with 'iq') -> (per_channel, global).
     per_channel[ch] = {R, n, amp} ; global = {R_median, R_p10, R_mean,
     R_amp_weighted, n_channels, n_proc}."""
-    # Ordre temporel garanti pour le découpage stationnarité (1ère/2e moitié).
-    recs = sorted(recs, key=lambda r: r.get("t_ms", 0))
     phasors = defaultdict(list)   # channel -> unit phasors over time
     amps = defaultdict(list)      # channel -> |Y_I*Y_R| over time
     for r in recs:
@@ -54,34 +52,18 @@ def consistency(recs, min_samples=20):
     perch = {}
     for ch, v in phasors.items():
         if len(v) >= min_samples:
-            va = np.asarray(v)
-            h = len(va) // 2
-            # Stationnarité : cohérence sur 1ère vs 2e moitié, et dérive de phase
-            # (angle entre les moyennes des deux moitiés). Statique -> R1~=R2~=R
-            # et dérive ~0 ; un mouvement/dérive fait chuter R sur le tout et
-            # ouvre un écart de phase entre moitiés.
-            R1 = float(abs(va[:h].mean())) if h >= 1 else float(abs(va.mean()))
-            R2 = float(abs(va[h:].mean())) if h >= 1 else float(abs(va.mean()))
-            drift = float(np.angle(va[h:].mean() / va[:h].mean())) if h >= 1 else 0.0
-            perch[ch] = {"R": float(abs(va.mean())), "n": len(v),
-                         "amp": float(np.mean(amps[ch])),
-                         "R1": R1, "R2": R2, "drift": drift}
+            perch[ch] = {"R": float(abs(np.mean(v))), "n": len(v),
+                         "amp": float(np.mean(amps[ch]))}
     if not perch:
         return {}, {"R_median": float("nan"), "R_p10": float("nan"),
                     "R_mean": float("nan"), "R_amp_weighted": float("nan"),
-                    "stat": float("nan"), "drift_deg": float("nan"),
                     "n_channels": 0, "n_proc": len(recs)}
     R = np.array([d["R"] for d in perch.values()])
     w = np.array([d["amp"] for d in perch.values()])
-    Rh = np.array([(d["R1"] + d["R2"]) / 2 for d in perch.values()])
-    drift = np.array([abs(d["drift"]) for d in perch.values()])
     glob = {"R_median": float(np.median(R)),
             "R_p10": float(np.percentile(R, 10)),
             "R_mean": float(np.mean(R)),
             "R_amp_weighted": float(np.sum(R * w) / np.sum(w)),
-            # stat ~1 = stationnaire ; < ~0.9 = suspect (dérive/mouvement).
-            "stat": float(np.median(R / np.maximum(Rh, 1e-6))),
-            "drift_deg": float(np.median(drift) * 180.0 / np.pi),
             "n_channels": int(R.size), "n_proc": len(recs)}
     return perch, glob
 
@@ -111,10 +93,9 @@ def reliability_curve(Rvals):
 
 
 def report_figure(results, labels, beacon, out):
-    """Rich 6-panel report for one beacon (overlays all tests present):
+    """Rich 4-panel report for one beacon (overlays all tests present):
     A per-channel coherence, B reliability-vs-fraction (top-X%), C distribution,
-    D coherence vs amplitude, E stationarity (R first vs second half),
-    F per-channel phase drift between the two test halves."""
+    D coherence vs amplitude."""
     import matplotlib.pyplot as plt
 
     keys = [lb for lb in labels if (lb, beacon) in results and results[(lb, beacon)][0]]
@@ -123,21 +104,16 @@ def report_figure(results, labels, beacon, out):
         return
     single = len(keys) == 1
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    fig, ax = plt.subplots(3, 2, figsize=(13, 12))
-    axA, axB = ax[0, 0], ax[0, 1]
-    axC, axD = ax[1, 0], ax[1, 1]
-    axE, axF = ax[2, 0], ax[2, 1]
+    fig, ax = plt.subplots(2, 2, figsize=(13, 8))
+    axA, axB, axC, axD = ax[0, 0], ax[0, 1], ax[1, 0], ax[1, 1]
 
     for k, lb in enumerate(keys):
         perch, g = results[(lb, beacon)]
         chs = sorted(perch)
         R = np.array([perch[c]["R"] for c in chs])
         amp = np.array([perch[c]["amp"] for c in chs])
-        R1 = np.array([perch[c]["R1"] for c in chs])
-        R2 = np.array([perch[c]["R2"] for c in chs])
-        drift = np.array([perch[c]["drift"] for c in chs]) * 180.0 / np.pi
         c = colors[k % len(colors)]
-        lab = f"{lb} (med {g['R_median']:.2f}, stat {g['stat']:.2f})"
+        lab = f"{lb} (med {g['R_median']:.2f})"
 
         axA.plot(chs, R, ".-", ms=4, lw=0.7, color=c, label=lab)
         axA.axhline(g["R_median"], color=c, ls=":", lw=0.7, alpha=0.5)
@@ -153,8 +129,6 @@ def report_figure(results, labels, beacon, out):
 
         axC.hist(R, bins=20, range=(0, 1), alpha=0.5, color=c, label=lab)
         axD.plot(amp, R, ".", ms=4, color=c, alpha=0.55, label=lab)
-        axE.plot(R1, R2, ".", ms=4, color=c, alpha=0.55, label=lab)
-        axF.plot(chs, drift, ".-", ms=3, lw=0.5, color=c, label=lab)
 
     # A — per-channel coherence (+ amplitude on a twin axis when single test)
     if single:
@@ -190,25 +164,7 @@ def report_figure(results, labels, beacon, out):
     axD.set_title("D · coherence vs amplitude  (fading -> low R)", fontsize=9)
     axD.grid(alpha=0.3)
 
-    # E — stationarity: coherence on the 1st vs 2nd half of the test
-    axE.plot([0, 1], [0, 1], "k--", lw=0.7, alpha=0.5)
-    axE.set_xlim(0, 1.02); axE.set_ylim(0, 1.02)
-    axE.set_xlabel("R (1st half)"); axE.set_ylabel("R (2nd half)")
-    axE.set_title("E · stationarity  (on the diagonal = stable channel)", fontsize=9)
-    axE.grid(alpha=0.3)
-    if not single:
-        axE.legend(fontsize=7, loc="lower right")
-
-    # F — per-channel phase drift between the two halves
-    axF.axhline(0, color="k", lw=0.5, alpha=0.4)
-    axF.set_xlabel("CS channel"); axF.set_ylabel("phase drift 1st->2nd half (deg)")
-    axF.set_title("F · phase drift  (flat ~0 = static ; ramp = geometry change)", fontsize=9)
-    axF.grid(alpha=0.3)
-
-    stat0 = results[(keys[0], beacon)][1]["stat"]
-    verdict = "static OK" if stat0 >= 0.90 else "⚠ possibly non-static"
-    fig.suptitle(f"IQ consistency report — beacon b{beacon}   (stat {stat0:.2f} · {verdict})",
-                 fontsize=12)
+    fig.suptitle(f"IQ consistency report — beacon b{beacon}", fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(out, dpi=120)
     plt.close(fig)
@@ -246,18 +202,13 @@ def main():
         sys.exit("No measurement with IQ ('iq' field) found. Use a test recorded "
                  "with the current uart_console.")
 
-    # ── console : global table (+ stationarity) ─────────────────────────────
-    print(f"\n{'test':<28} {'b':>2} | {'R med':>6} {'R p10':>6} {'amp-w':>6} "
-          f"{'stat':>5} {'drift°':>6} {'chan':>5} {'proc':>5}")
-    print("-" * 84)
+    # ── console : global table ──────────────────────────────────────────────
+    print(f"\n{'test':<28} {'b':>2} | {'R med':>7} {'R 10th':>7} {'amp-w':>7} "
+          f"{'chan':>5} {'proc':>5}")
+    print("-" * 72)
     for (label, b), (perch, g) in results.items():
-        suspect = g['stat'] == g['stat'] and g['stat'] < 0.90   # not-NaN and low
-        flag = "  <- non-static?" if suspect else ""
-        print(f"{label[:28]:<28} b{b:<1} | {g['R_median']:>6.3f} {g['R_p10']:>6.3f} "
-              f"{g['R_amp_weighted']:>6.3f} {g['stat']:>5.2f} {g['drift_deg']:>6.1f} "
-              f"{g['n_channels']:>5d} {g['n_proc']:>5d}{flag}")
-    print("  stat ~1 = static; < 0.90 = suspect (drift/movement); "
-          "drift° = median per-channel phase drift between the two test halves")
+        print(f"{label[:28]:<28} b{b:<1} | {g['R_median']:>7.3f} {g['R_p10']:>7.3f} "
+              f"{g['R_amp_weighted']:>7.3f} {g['n_channels']:>5d} {g['n_proc']:>5d}")
     print()
 
     if args.report:

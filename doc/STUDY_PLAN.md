@@ -154,9 +154,9 @@ already reports per beacon (`--beacon N` to isolate one).
 ### Scenario 6 — Antenna (profile + distance fixed)
 - [ ] height **low** vs **high** (ground reflection)  · [ ] orientation **0°** vs **90°** (rot90)
 
-### Scenario 7 — Reproducibility / stationarity
+### Scenario 7 — Reproducibility
 - [ ] repeat one Scenario-1 profile **×3** (repeatability of `R`)
-- [ ] one **30 min** static test (`--test 1800`) — drift check
+- [ ] one **30 min** static test (`--test 1800`) — long-run repeatability of `R`
 
 ### Scenario 8 — Robustness (separate, not part of the reference)
 - [ ] quiet vs busy 2.4 GHz / with foot traffic — expect transient `R` drops + aborts
@@ -171,8 +171,8 @@ already reports per beacon (`--beacon N` to isolate one).
 2. Static and quiet; wait ~1 s after arming.
 3. `python uart_console.py --port /dev/ttyACM0 --test 30`.
 4. Note the metadata; the folder (`tests/YYYYMMDD/test_<stamp>/`) archives IQ + config.
-5. (Offline) `iq_consistency.py --json <...> --report` — check the stationarity
-   panel; discard the test if R drifts across the capture (movement/traffic).
+5. (Offline) `iq_consistency.py --json <...> --report` — read the coherence
+   median, the top-X% curve and the R-vs-amplitude panel.
 
 ---
 
@@ -185,7 +185,7 @@ already reports per beacon (`--beacon N` to isolate one).
   one curve) + a per-channel fading example (nulls ↔ coherence dips).
 
 ## 8. Validity & caveats
-- Static-channel assumption — validated per test by the stationarity panel.
+- Static-channel assumption — the beacons are fixed, so the channel is static by construction.
 - No absolute-distance claim (calibration not part of the study).
 - Antenna orientation is a confound on weak links — controlled in Scenario 5.
 - Interference / foot traffic excluded from the reference (Scenario 7 only).

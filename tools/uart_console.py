@@ -261,7 +261,7 @@ class Display:
         return made
 
     def _plot_consistency(self, outdir):
-        """Rapport de consistance IQ (cohérence par canal, top-X%, stationnarité)
+        """Rapport de consistance IQ (cohérence par canal, top-X%, R-vs-amplitude)
         par beacon, écrit dans le dossier du test. Réutilise iq_consistency.
         Best-effort. Renvoie la liste des PNG (consistency_bX.png)."""
         try:
