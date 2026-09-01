@@ -1,0 +1,11 @@
+{
+ "date": "2026-09-01 10:06:04",
+ "note": "check_indoor_N1",
+ "duree_s": 8,
+ "calibration": {
+  "global_m": 0.8,
+  "par_beacon": {}
+ },
+ "rapport": {},
+ "mesures": {}
+}

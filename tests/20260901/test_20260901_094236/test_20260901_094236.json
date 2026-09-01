@@ -1,0 +1,11 @@
+{
+ "date": "2026-09-01 09:42:36",
+ "note": "check_N3",
+ "duree_s": 6,
+ "calibration": {
+  "global_m": 0.8,
+  "par_beacon": {}
+ },
+ "rapport": {},
+ "mesures": {}
+}
