@@ -10,23 +10,23 @@
 
 LOG_MODULE_DECLARE(app_main, LOG_LEVEL_INF);
 
-/* ── Whitelist par ADRESSE ───────────────────────────────────────────────────
- * Filtre applicatif : à la connexion, connected_cb (main.c) rejette toute
- * adresse hors liste quand la whitelist est active. Les réflecteurs sont en
- * RANDOM STATIC (adresse stable) → l'adresse est un identifiant valable.
- * (RPA tournante = il faudrait du bonding/IRK, hors cas d'usage actuel.)
- * L'état est modifiable à chaud par le "manager" externe via l'UART. */
+/* ── Whitelist by ADDRESS ────────────────────────────────────────────────────
+ * Application filter: on connection, connected_cb (main.c) rejects any address
+ * off the list when the whitelist is active. The reflectors are RANDOM STATIC
+ * (stable address) → the address is a valid identifier.
+ * (Rotating RPA = would need bonding/IRK, out of the current use case.)
+ * The state is hot-editable by the external "manager" over UART. */
 #define WL_MAX 8
 static bt_addr_le_t wl[WL_MAX];
 static int          wl_count;
-static bool         wl_enabled;   /* false = pas de filtrage (tout autorisé) */
+static bool         wl_enabled;   /* false = no filtering (everything allowed) */
 
-/* ── Channel map demandée par le manager (préparation hot-swap) ─────────────*/
+/* ── Channel map requested by the manager (hot-swap staging) ────────────────*/
 static uint8_t cur_map[10];
-static bool    has_map;           /* une map a été fixée via CHMAP:* */
+static bool    has_map;           /* a map has been set via CHMAP:* */
 
-/* ── Mutex : les commandes UART (workqueue) et les lectures (thread BT /
- * mesure) touchent whitelist et map. */
+/* ── Mutex: the UART commands (workqueue) and the reads (BT / measurement
+ * thread) touch the whitelist and the map. */
 static K_MUTEX_DEFINE(mgr_lock);
 
 void manager_init(void)
@@ -68,32 +68,32 @@ bool manager_get_chmap(uint8_t channel_map[10])
 	return set;
 }
 
-/* ── Commandes ──────────────────────────────────────────────────────────── */
+/* ── Commands ───────────────────────────────────────────────────────────── */
 
 static void wl_add(const char *addr_s, const char *type_s)
 {
 	bt_addr_le_t a;
 
 	if (bt_addr_le_from_str(addr_s, type_s, &a)) {
-		LOG_WRN("mgr: adresse invalide '%s %s'", addr_s, type_s);
+		LOG_WRN("mgr: invalid address '%s %s'", addr_s, type_s);
 		return;
 	}
 	k_mutex_lock(&mgr_lock, K_FOREVER);
 	for (int i = 0; i < wl_count; i++) {
-		if (bt_addr_le_cmp(&wl[i], &a) == 0) {   /* déjà présente */
+		if (bt_addr_le_cmp(&wl[i], &a) == 0) {   /* already present */
 			k_mutex_unlock(&mgr_lock);
 			return;
 		}
 	}
 	if (wl_count >= WL_MAX) {
 		k_mutex_unlock(&mgr_lock);
-		LOG_WRN("mgr: whitelist pleine (%d)", WL_MAX);
+		LOG_WRN("mgr: whitelist full (%d)", WL_MAX);
 		return;
 	}
 	wl[wl_count++] = a;
 	int n = wl_count;
 	k_mutex_unlock(&mgr_lock);
-	LOG_INF("mgr: whitelist += %s (%s), %d entree(s)", addr_s, type_s, n);
+	LOG_INF("mgr: whitelist += %s (%s), %d entry(ies)", addr_s, type_s, n);
 }
 
 static void wl_del(const char *addr_s, const char *type_s)
@@ -115,9 +115,9 @@ static void wl_del(const char *addr_s, const char *type_s)
 	k_mutex_unlock(&mgr_lock);
 }
 
-/* Prépare une channel map décimée 1/n (n=1 → pleine). Prend effet à la
- * prochaine création de config CS (reconnexion). Pour un hot-swap LIVE, il
- * faut re-créer la config en cours de connexion (redémarrage procédure). */
+/* Stages a 1/n decimated channel map (n=1 → full). Takes effect at the next CS
+ * config creation (reconnection). For a LIVE hot-swap, the config must be
+ * re-created during the connection (procedure restart). */
 static void chmap_thin(int n)
 {
 	uint8_t map[10];
@@ -144,7 +144,7 @@ static void chmap_thin(int n)
 	memcpy(cur_map, map, 10);
 	has_map = true;
 	k_mutex_unlock(&mgr_lock);
-	LOG_INF("mgr: chmap 1/%d preparee (effet a la prochaine (re)config CS)", n);
+	LOG_INF("mgr: chmap 1/%d staged (effective at the next CS (re)config)", n);
 }
 
 void manager_uart_line(const char *line)
@@ -174,7 +174,7 @@ void manager_uart_line(const char *line)
 		k_mutex_lock(&mgr_lock, K_FOREVER);
 		wl_count = 0;
 		k_mutex_unlock(&mgr_lock);
-		LOG_INF("mgr: whitelist videe");
+		LOG_INF("mgr: whitelist cleared");
 		return;
 	}
 	if (!strncmp(line, "WL:LIST", 7)) {
@@ -226,5 +226,5 @@ void manager_uart_line(const char *line)
 			"WL:ADD/DEL <addr> [public|random] | CHMAP:THIN <n> | CHMAP:FULL");
 		return;
 	}
-	LOG_WRN("mgr: commande inconnue: %s", line);
+	LOG_WRN("mgr: unknown command: %s", line);
 }

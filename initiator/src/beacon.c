@@ -64,7 +64,7 @@ void decalage(void)
 		if (beacons[left].active) {
 			continue;
 		}
-		/* slot libre trouvé : cherche le prochain actif à droite */
+		/* free slot found: look for the next active one to the right */
 		for (int right = left + 1; right < MAX_BEACONS; right++) {
 			if (beacons[right].active) {
 				beacons[left]         = beacons[right];

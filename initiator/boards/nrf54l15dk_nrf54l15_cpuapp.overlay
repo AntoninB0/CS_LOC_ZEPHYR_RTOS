@@ -1,16 +1,16 @@
-/* ── UARTs de l'initiateur ──────────────────────────────────────────────────
- * Mapping DK (J-Link OB) :
- *   uart20  P1.04/P1.05 → VCOM (Serial Port 1) : console/logs Zephyr
- *   uart30  P0.00/P0.01 → VCOM (Serial Port 0) : NOTRE canal data+commandes
- *   uart21  P1.08/P1.09 → header d'extension (AUCUN VCOM) : liaison drone
- * if.c choisit uart30 (banc PC) ou uart21 (embarqué drone) via
- * IF_UART_ON_VCOM dans if.c. */
+/* ── Initiator UARTs ────────────────────────────────────────────────────────
+ * DK mapping (J-Link OB):
+ *   uart20  P1.04/P1.05 -> VCOM (Serial Port 1): Zephyr console/logs
+ *   uart30  P0.00/P0.01 -> VCOM (Serial Port 0): OUR data+commands channel
+ *   uart21  P1.08/P1.09 -> extension header (NO VCOM): drone link
+ * if.c selects uart30 (bench PC) or uart21 (drone-embedded) via
+ * IF_UART_ON_VCOM in if.c. */
 
-/* 1 Mbaud sur le canal data : le dump IQ continu (IQL/IQP) passe de ~30-60 ms
- * à ~4-7 ms par procédure. Les deux UART montés au même débit pour couvrir les
- * deux cibles de if.c (uart30 = VCOM banc PC ; uart21 = liaison drone). NB : à
- * 1 Mbaud le J-Link OB du DK peut tronquer selon sa version de firmware ;
- * si lignes IQ corrompues sur le VCOM, redescendre uart30 à 921600. */
+/* 1 Mbaud on the data channel: the continuous IQ dump (IQL/IQP) drops from
+ * ~30-60 ms to ~4-7 ms per procedure. Both UARTs set to the same rate to cover
+ * if.c's two targets (uart30 = bench-PC VCOM; uart21 = drone link). NB: at
+ * 1 Mbaud the DK's J-Link OB may truncate depending on its firmware version;
+ * if the IQ lines are corrupt on the VCOM, drop uart30 back to 921600. */
 &uart30 {
     status = "okay";
     current-speed = <921600>;

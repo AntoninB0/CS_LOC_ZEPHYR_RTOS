@@ -6,9 +6,9 @@
 
 LOG_MODULE_DECLARE(app_main, LOG_LEVEL_INF);
 
-/* 1 = uart30 (VCOM Serial Port 0, banc PC via USB — cs_console.py)
- * 0 = uart21 (P1.08/P1.09, header d'extension — compagnon drone en vol)
- * Voir le mapping complet dans boards/nrf54l15dk_nrf54l15_cpuapp.overlay. */
+/* 1 = uart30 (VCOM Serial Port 0, bench PC via USB — cs_console.py)
+ * 0 = uart21 (P1.08/P1.09, extension header — drone companion in flight)
+ * See the full mapping in boards/nrf54l15dk_nrf54l15_cpuapp.overlay. */
 #define IF_UART_ON_VCOM 1
 
 #if IF_UART_ON_VCOM
@@ -19,11 +19,11 @@ LOG_MODULE_DECLARE(app_main, LOG_LEVEL_INF);
 
 static const struct device *uart_dev = DEVICE_DT_GET(UART_NODE);
 
-/* ── RX : commandes ligne (scheduler) ───────────────────────────────────────
- * L'ISR accumule jusqu'à '\n' puis délègue le parsing à la system workqueue
- * (contexte thread : le handler utilisateur peut prendre des mutex/logger).
- * Une ligne arrivée pendant le traitement de la précédente l'écrase — sans
- * conséquence pour des commandes de configuration ponctuelles. */
+/* ── RX: line commands (scheduler) ───────────────────────────────────────────
+ * The ISR accumulates until '\n' then delegates parsing to the system
+ * workqueue (thread context: the user handler may take mutexes/log). A line
+ * arriving while the previous one is being processed overwrites it — of no
+ * consequence for occasional configuration commands. */
 #define IF_LINE_MAX 64
 
 static if_line_cb_t line_cb;
@@ -55,7 +55,7 @@ static void uart_isr(const struct device *dev, void *user_data)
 			} else if (rx_len < IF_LINE_MAX - 1) {
 				rx_acc[rx_len++] = (char)c;
 			} else {
-				rx_len = 0; /* ligne trop longue : abandon */
+				rx_len = 0; /* line too long: discard */
 			}
 		}
 	}

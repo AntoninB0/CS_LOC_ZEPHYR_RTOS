@@ -5,38 +5,38 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* ── Manager applicatif (remplace le scheduler) ─────────────────────────────
- * Reçoit les commandes UART (contexte workqueue : mutex/log OK), pilote le
- * dump IQ, gère une whitelist d'adresses de réflecteurs modifiable à chaud, et
- * prépare le hot-swap de la channel map.
+/* ── Application manager (replaces the scheduler) ────────────────────────────
+ * Receives the UART commands (workqueue context: mutex/log OK), drives the IQ
+ * dump, manages a hot-editable whitelist of reflector addresses, and stages the
+ * channel-map hot-swap.
  *
- * Protocole UART (lignes ASCII, uart data) :
- *   IQON / IQOFF                 active / coupe le dump IQ (IQL/IQP)
- *   WL:ON / WL:OFF               active / désactive le filtrage whitelist
- *   WL:ADD <addr> [public|random]  ajoute une adresse (type random par défaut)
- *   WL:DEL <addr> [public|random]  retire une adresse
- *   WL:CLR                       vide la whitelist
- *   WL:LIST                      logue la whitelist
- *   CHMAP:THIN <n>               prépare une channel map décimée 1/n (1..4)
- *   CHMAP:FULL                   prépare la channel map pleine
- *   HELP                         liste les commandes
- * Toute ligne inconnue est ignorée (log WRN). */
+ * UART protocol (ASCII lines, data uart):
+ *   IQON / IQOFF                 enable / disable the IQ dump (IQL/IQP)
+ *   WL:ON / WL:OFF               enable / disable whitelist filtering
+ *   WL:ADD <addr> [public|random]  add an address (random type by default)
+ *   WL:DEL <addr> [public|random]  remove an address
+ *   WL:CLR                       clear the whitelist
+ *   WL:LIST                      log the whitelist
+ *   CHMAP:THIN <n>               stage a 1/n decimated channel map (1..4)
+ *   CHMAP:FULL                   stage the full channel map
+ *   HELP                         list the commands
+ * Any unknown line is ignored (WRN log). */
 void manager_init(void);
 
-/* Handler de ligne UART, à passer à if_set_line_cb(). */
+/* UART line handler, to pass to if_set_line_cb(). */
 void manager_uart_line(const char *line);
 
-/* Whitelist : true si la connexion à `addr` est autorisée. Toujours true si la
- * whitelist est désactivée (WL:OFF). Appelé depuis connected_cb (main.c). */
+/* Whitelist: true if the connection to `addr` is allowed. Always true if the
+ * whitelist is disabled (WL:OFF). Called from connected_cb (main.c). */
 bool manager_addr_allowed(const bt_addr_le_t *addr);
 
-/* Channel map demandée par l'UART (CHMAP:*). Retourne true et copie 10 octets
- * si une map a été fixée par le manager, false sinon (→ map compile-time du
- * profil). Utilisé par cs_build_channel_map à la création de config.
- * ⚠ Un changement ne prend effet qu'à la prochaine (re)création de config CS,
- * c.-à-d. à la (re)connexion d'un beacon. Un hot-swap LIVE (sans reconnexion)
- * impose disable → create_config(nouvelle map) → re-enable = redémarrage de la
- * procédure — à valider au banc (voir note dans manager.c). */
+/* Channel map requested over UART (CHMAP:*). Returns true and copies 10 bytes
+ * if a map was set by the manager, false otherwise (→ the profile's
+ * compile-time map). Used by cs_build_channel_map at config creation.
+ * ⚠ A change only takes effect at the next CS config (re)creation, i.e. at a
+ * beacon (re)connection. A LIVE hot-swap (without reconnection) requires
+ * disable → create_config(new map) → re-enable = procedure restart — to be
+ * validated on the bench (see the note in manager.c). */
 bool manager_get_chmap(uint8_t channel_map[10]);
 
 #endif /* MANAGER_H */

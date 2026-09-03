@@ -4,33 +4,31 @@
 #include <zephyr/kernel.h>
 #include "beacon.h"
 
-/* Setup Channel Sounding complet pour un beacon fraîchement sécurisé (L2) :
- * découverte RAS, capacités, default settings, config CS, sécurité CS,
- * paramètres de procédure. BLOQUANT (sémaphores internes).
- * À appeler depuis le thread de pairing, séquentiellement.
- * Retourne 0 si le beacon est prêt pour le ranging. */
+/* Full Channel Sounding setup for a freshly secured (L2) beacon: RAS
+ * discovery, capabilities, default settings, CS config, CS security, procedure
+ * parameters. BLOCKING (internal semaphores).
+ * Call from the pairing thread, sequentially.
+ * Returns 0 if the beacon is ready for ranging. */
 int cs_setup_beacon(struct beacon_state *beacon);
 
-/* Init des états de mesure par beacon. À appeler une fois avant la boucle. */
+/* Init of the per-beacon measurement states. Call once before the loop. */
 void cs_ranging_init(void);
 
-/* FREE-RUNNING (max_procedure_count = 0 : le contrôleur répète les procédures
- * tous les procedure_interval, le handshake LL de ~495 ms n'est payé qu'à
- * l'armement) :
- *  - cs_enable_beacon(i)  : ARME les procédures du beacon i, UNE FOIS (et
- *                           après reconnexion). Retourne 0 si accepté.
- *  - cs_collect_beacon(i) : attend la prochaine mesure appariée (steps locaux
- *                           + ranging data pair du même compteur) et émet le
- *                           dump IQ horodaté (IQL/IQP). Retourne 0 si une
- *                           mesure a été émise, < 0 sinon. *rearmed passe à
- *                           false si le beacon doit être ré-armé (chemin
- *                           on-demand uniquement). AUCUN calcul de distance
- *                           (fait hors carte).
- * La collecte ne consomme pas d'airtime : les procédures des N liens tournent
- * en fond, la cadence par beacon = procedure_interval × intervalle de
- * connexion (mesures non collectées à temps : écrasées, pas accumulées). */
-/* Dump IQ horodaté vers l'UART data (ON par défaut, désactivable par commande
- * UART IQOFF/réactivable IQON, format des lignes documenté dans GUIDE.md). */
+/* FREE-RUNNING (max_procedure_count = 0: the controller repeats the procedures
+ * every procedure_interval, the ~495 ms LL handshake is paid only at arming):
+ *  - cs_enable_beacon(i)  : ARMS beacon i's procedures, ONCE (and after a
+ *                           reconnection). Returns 0 if accepted.
+ *  - cs_collect_beacon(i) : waits for the next paired measurement (local steps
+ *                           + peer ranging data of the same counter) and emits
+ *                           the timestamped IQ dump (IQL/IQP). Returns 0 if a
+ *                           measurement was emitted, < 0 otherwise. *rearmed
+ *                           goes false if the beacon must be re-armed (on-demand
+ *                           path only). NO distance computation (done off-board).
+ * Collection consumes no airtime: the N links' procedures run in the
+ * background, the per-beacon rate = procedure_interval x connection interval
+ * (measurements not collected in time: overwritten, not accumulated). */
+/* Timestamped IQ dump to the data UART (ON by default, disabled by the UART
+ * command IQOFF / re-enabled by IQON, line format documented in GUIDE.md). */
 extern bool cs_iq_dump;
 
 int cs_enable_beacon(int i);

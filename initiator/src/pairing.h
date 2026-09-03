@@ -11,8 +11,8 @@ extern k_thread_stack_t pairing_stack[];
 
 void pairing_n_bluetooth(void);
 
-/* Bloque jusqu'à ce que MAX_BEACONS réflecteurs soient connectés et sécurisés.
- * Retourne 0 si succès, -EAGAIN si timeout. */
+/* Blocks until MAX_BEACONS reflectors are connected and secured.
+ * Returns 0 on success, -EAGAIN on timeout. */
 int pairing_wait_all_connected(k_timeout_t timeout);
 
 #endif /* PAIRING_H */

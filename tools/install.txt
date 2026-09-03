@@ -1,36 +1,36 @@
 # ─────────────────────────────────────────────────────────────────────────
-# Environnement Python pour la chaîne UART :
-#   uart_console.py  console : commandes (IQON/IQOFF/AUTO/ORDER) + affichage
-#                    des mesures décodées avec distance estimée
-#   cs_decoder.py    décodage/validation/appariement des lignes IQL/IQP
-#   estimation.py    estimation de distance (phase + RTT)
+# Python environment for the UART chain:
+#   uart_console.py  console: commands (IQON/IQOFF/AUTO/ORDER) + display of the
+#                    decoded measurements with estimated distance
+#   cs_decoder.py    decoding/validation/pairing of the IQL/IQP lines
+#   estimation.py    distance estimation (phase + RTT)
 # ─────────────────────────────────────────────────────────────────────────
 
-# ── 1. Créer le venv (une seule fois) ──────────────────────────────────────
+# ── 1. Create the venv (once) ──────────────────────────────────────────────
 #   cd tools
 #   python3 -m venv .venv
 #
-# ── 2. L'ACTIVER (à chaque nouvelle session de terminal) ───────────────────
-#   Linux / macOS (bash, zsh) :
+# ── 2. ACTIVATE it (in every new terminal session) ─────────────────────────
+#   Linux / macOS (bash, zsh):
 #     source .venv/bin/activate
-#   Windows PowerShell :
+#   Windows PowerShell:
 #     .venv\Scripts\Activate.ps1
 #
-#   -> l'invite affiche « (.venv) » quand c'est actif.
+#   -> the prompt shows "(.venv)" when it is active.
 #
-# ── 3. Installer les dépendances (une fois, venv activé) ───────────────────
+# ── 3. Install the dependencies (once, venv activated) ──────────────────────
 #   pip install -r install.txt
 #
-# ── 4. Lancer ──────────────────────────────────────────────────────────────
-#   python uart_console.py --list                    # repérer le /dev/ttyACM*
-#   python uart_console.py --port /dev/ttyACM0       # live (921600 par défaut)
-#   python uart_console.py --file capture_ref_921600.txt   # rejeu hors ligne
+# ── 4. Run ──────────────────────────────────────────────────────────────────
+#   python uart_console.py --list                    # find the /dev/ttyACM*
+#   python uart_console.py --port /dev/ttyACM0       # live (921600 by default)
+#   python uart_console.py --file capture_ref_921600.txt   # offline replay
 #
-# ── 5. Désactiver (quitter le venv) ────────────────────────────────────────
+# ── 5. Deactivate (leave the venv) ─────────────────────────────────────────
 #   deactivate
 #
-# Note : le venv (.venv/) est ignoré par git (.gitignore). Le recréer avec les
-# étapes 1-3 sur une autre machine.
+# Note: the venv (.venv/) is ignored by git (.gitignore). Recreate it with
+# steps 1-3 on another machine.
 # ─────────────────────────────────────────────────────────────────────────
 
 pyserial>=3.5

@@ -15,8 +15,8 @@ FLASH=1
 CLEAN=0
 precision=0
 TARGET=all            # all | initiator | reflectors | full-reflector
-# SNR de l'initiateur FIGÉ (étiquette du DK). Sans ça, "premier SNR trié" =
-# loterie : le firmware initiateur peut partir sur un réflecteur.
+# PINNED initiator SNR (DK label). Without it, "first sorted SNR" = a lottery:
+# the initiator firmware could end up on a reflector.
 INITIATOR_SNR_PIN=1057702942
 
 prev=""
@@ -32,21 +32,21 @@ for arg in "$@"; do
         --init-snr)        prev=init_snr ; continue ;;
         --help)
             echo "Usage: $0 [--boat-1] [--boat-n] [--no-flash] [--clean] [--reflectors-only|--initiator-only] [--init-snr SNR]"
-            echo "  --boat-1            précision appliquée pour un beacon"
-            echo "  --boat-n            précision appliquée pour n beacon"
-            echo "  --no-flash          build seulement"
-            echo "  --clean             nettoie les build dirs avant"
-            echo "  --reflectors-only   build+flash uniquement les réflecteurs"
-            echo "                      (ex: changement de N ou de scheduler → inutile ;"
-            echo "                       changement de FAMILLE/CS_EVENT_LEN → nécessaire)"
-            echo "  --initiator-only    build+flash uniquement l'initiateur"
-            echo "                      (cas courant : profil, N, scheduler, IQ...)"
-            echo "  --full-reflector    TOUTES les cartes connectées deviennent des"
-            echo "                      réflecteurs (initiateur inclus) — utile pour"
-            echo "                      préparer un lot de beacons ou requalifier la"
-            echo "                      carte initiateur. Pour revenir :"
+            echo "  --boat-1            precision overlay for one beacon (single)"
+            echo "  --boat-n            precision overlay for n beacons (multi)"
+            echo "  --no-flash          build only"
+            echo "  --clean             clean the build dirs first"
+            echo "  --reflectors-only   build+flash the reflectors only"
+            echo "                      (e.g. change of N or scheduler -> not needed;"
+            echo "                       change of FAMILY/CS_EVENT_LEN -> needed)"
+            echo "  --initiator-only    build+flash the initiator only"
+            echo "                      (common case: profile, N, scheduler, IQ...)"
+            echo "  --full-reflector    ALL connected boards become reflectors"
+            echo "                      (initiator included) — useful to prepare a"
+            echo "                      batch of beacons or requalify the initiator"
+            echo "                      board. To revert:"
             echo "                      ./build.sh --initiator-only"
-            echo "  --init-snr SNR      SNR de l'initiateur (défaut: $INITIATOR_SNR_PIN)"
+            echo "  --init-snr SNR      initiator SNR (default: $INITIATOR_SNR_PIN)"
             exit 0 ;;
         *)
             if [ "$prev" = "init_snr" ]; then INITIATOR_SNR_PIN=$arg; prev=""; fi ;;
@@ -119,24 +119,24 @@ done
 
 if [ "$TARGET" = "full-reflector" ]; then
     echo ""
-    echo ">>> Mode FULL-REFLECTOR : toutes les cartes deviennent des réflecteurs."
+    echo ">>> FULL-REFLECTOR mode: all boards become reflectors."
     for snr in $SNRS; do
         tag=""
-        [ "$snr" = "$INITIATOR_SNR_PIN" ] && tag="  (ex-initiateur !)"
+        [ "$snr" = "$INITIATOR_SNR_PIN" ] && tag="  (ex-initiator!)"
         echo ">>> Flashing reflector → SNR $snr$tag"
         $LAUNCH west flash --build-dir "$REFLECTOR_BUILD" --dev-id "$snr"
     done
-    echo ">>> Done (full-reflector, $COUNT carte(s)). Rappel : plus AUCUN"
-    echo "    initiateur sur le banc — './build.sh --initiator-only' pour en refaire un."
+    echo ">>> Done (full-reflector, $COUNT board(s)). Reminder: NO initiator"
+    echo "    left on the bench — './build.sh --initiator-only' to make one again."
     exit 0
 fi
 
-# Initiateur = SNR figé s'il est branché, sinon premier SNR (avec warning)
+# Initiator = pinned SNR if plugged in, otherwise the first SNR (with a warning)
 if echo "$SNRS" | grep -q "^${INITIATOR_SNR_PIN}$"; then
     INITIATOR_SNR=$INITIATOR_SNR_PIN
 else
     INITIATOR_SNR=$(echo "$SNRS" | head -1)
-    echo "WARNING: SNR initiateur $INITIATOR_SNR_PIN absent, repli sur $INITIATOR_SNR"
+    echo "WARNING: initiator SNR $INITIATOR_SNR_PIN absent, falling back to $INITIATOR_SNR"
 fi
 BEACON_SNRS=$(echo "$SNRS" | grep -v "^${INITIATOR_SNR}$" || true)
 

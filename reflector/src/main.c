@@ -17,7 +17,7 @@ LOG_MODULE_REGISTER(app_main, LOG_LEVEL_INF);
 
 #define CON_STATUS_LED DK_LED1
 
-/* Ranging Service UUID 0x185B — filtre utilisé par l'initiateur */
+/* Ranging Service UUID 0x185B — filter used by the initiator */
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 	BT_DATA_BYTES(BT_DATA_UUID16_ALL,
@@ -26,12 +26,12 @@ static const struct bt_data ad[] = {
 		CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
 };
 
-/* ── (Re)démarrage d'advertising via workqueue ──────────────────────────
- * Ne JAMAIS appeler bt_le_adv_start() directement dans disconnected_cb :
- * l'objet de connexion n'est pas encore libéré à cet instant, et avec
- * CONFIG_BT_MAX_CONN=1 il n'y a aucun slot libre → -ENOMEM → le
- * réflecteur ne ré-advertise plus jamais. On diffère donc vers la
- * workqueue système, avec retry tant que le slot n'est pas rendu. */
+/* ── Advertising (re)start via workqueue ────────────────────────────────
+ * NEVER call bt_le_adv_start() directly in disconnected_cb: the connection
+ * object is not freed yet at that instant, and with CONFIG_BT_MAX_CONN=1
+ * there is no free slot → -ENOMEM → the reflector never re-advertises
+ * again. So we defer to the system workqueue, retrying until the slot is
+ * released. */
 static void adv_work_handler(struct k_work *work);
 static K_WORK_DELAYABLE_DEFINE(adv_work, adv_work_handler);
 
@@ -58,22 +58,22 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
 	LOG_INF("Connected to %s (err 0x%02X)", addr, err);
 
 	if (err) {
-		/* Une connexion échouée stoppe aussi l'advertising : relancer */
+		/* A failed connection also stops advertising: restart it */
 		k_work_schedule(&adv_work, K_MSEC(100));
 		return;
 	}
 
 	dk_set_led_on(CON_STATUS_LED);
 
-	/* L'instance RAS RRSP est allouée AUTOMATIQUEMENT par le service à la
-	 * connexion (CONFIG_BT_RAS_RRSP_AUTO_ALLOC_INSTANCE=y, défaut NCS 3.x).
-	 * Un bt_ras_rrsp_alloc() explicite ici retournerait une erreur
-	 * (instance déjà prise) — c'était la cause des déconnexions 0x13
-	 * qui avortaient le pairing (Security failed err 9 côté initiateur). */
+	/* The RAS RRSP instance is allocated AUTOMATICALLY by the service on
+	 * connection (CONFIG_BT_RAS_RRSP_AUTO_ALLOC_INSTANCE=y, NCS 3.x default).
+	 * An explicit bt_ras_rrsp_alloc() here would return an error (instance
+	 * already taken) — this was the cause of the 0x13 disconnections that
+	 * aborted the pairing (Security failed err 9 on the initiator side). */
 
-	/* Rôle Channel Sounding : réflecteur uniquement.
-	 * Les réponses aux procédures CS (mode 0/2) et à la sécurité CS
-	 * sont ensuite gérées automatiquement par le contrôleur. */
+	/* Channel Sounding role: reflector only.
+	 * The responses to the CS procedures (mode 0/2) and to CS security are
+	 * then handled automatically by the controller. */
 	const struct bt_le_cs_set_default_settings_param default_settings = {
 		.enable_initiator_role     = false,
 		.enable_reflector_role     = true,
@@ -94,10 +94,10 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 	LOG_INF("Disconnected (reason 0x%02X)", reason);
 	dk_set_led_off(CON_STATUS_LED);
 
-	/* Instance RAS libérée automatiquement (AUTO_ALLOC_INSTANCE) */
+	/* RAS instance freed automatically (AUTO_ALLOC_INSTANCE) */
 
-	/* Restart différé : le slot de connexion n'est rendu qu'après la
-	 * sortie de ce callback. 100 ms + retry couvre tous les cas. */
+	/* Deferred restart: the connection slot is only released after this
+	 * callback returns. 100 ms + retry covers all cases. */
 	k_work_schedule(&adv_work, K_MSEC(100));
 }
 

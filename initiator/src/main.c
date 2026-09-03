@@ -39,16 +39,16 @@ static void connected_cb(struct bt_conn *conn, uint8_t err)
 	LOG_INF("Connected: %s (err 0x%02X)", addr, err);
 
 	if (err) {
-		/* Pas d'unref ici : l'application n'a pas encore pris de référence,
-		 * le module scan gère la sienne. */
+		/* No unref here: the application has not taken a reference yet,
+		 * the scan module manages its own. */
 		return;
 	}
 
 	/* Reject duplicate connection to already-connected beacon */
 	const bt_addr_le_t *addr_le = bt_conn_get_dst(conn);
 
-	/* Whitelist manager : rejette toute adresse hors liste quand la
-	 * whitelist est active (WL:ON). Toujours OK si désactivée. */
+	/* Whitelist manager: rejects any address off the list when the
+	 * whitelist is active (WL:ON). Always OK when disabled. */
 	if (!manager_addr_allowed(addr_le)) {
 		LOG_WRN("Connection rejected (not whitelisted): %s", addr);
 		bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
@@ -86,9 +86,9 @@ static void disconnected_cb(struct bt_conn *conn, uint8_t reason)
 	bt_addr_le_to_str(bt_conn_get_dst(conn), addr, sizeof(addr));
 	LOG_INF("Disconnected: %s (reason 0x%02X)", addr, reason);
 
-	/* Release-once : l'unref n'est fait que si CET appel a libéré le slot.
-	 * Évite le double-unref (underflow de refcount) en course avec le
-	 * chemin d'erreur du thread de pairing. */
+	/* Release-once: the unref is done only if THIS call freed the slot.
+	 * Avoids the double-unref (refcount underflow) racing with the pairing
+	 * thread's error path. */
 	if (free_beacon(conn)) {
 		bt_conn_unref(conn);
 	}
@@ -134,9 +134,9 @@ BT_SCAN_CB_INIT(scan_cb, scan_filter_match, NULL, scan_connecting_error, scan_co
 static int scan_init(void)
 {
 	int err;
-	/* Paramètres de connexion initiaux = cs_cp_active (source unique dans
-	 * cs_config.h/.c). Pas d'init statique possible depuis une variable :
-	 * on pointe directement le scan sur la struct globale. */
+	/* Initial connection parameters = cs_cp_active (single source in
+	 * cs_config.h/.c). No static init possible from a variable: we point
+	 * the scan directly at the global struct. */
 	struct bt_scan_init_param param = {
 		.scan_param = NULL,
 		.conn_param = &cs_cp_active,
@@ -161,10 +161,10 @@ static int scan_init(void)
 	return 0;
 }
 
-/* ── Affichage 1 Hz ──────────────────────────────────────────────────────── */
+/* ── 1 Hz display ────────────────────────────────────────────────────────── */
 
-/* 2048 : le packaging cbprintf des %f par LOG_INF se fait dans le contexte
- * appelant — 512 octets débordaient la stack (hard fault aléatoire). */
+/* 2048: the cbprintf packaging of the %f in LOG_INF happens in the caller
+ * context — 512 bytes overflowed the stack (random hard fault). */
 #define DISPLAY_STACK_SIZE 2048
 #define DISPLAY_PRIORITY   7
 K_THREAD_STACK_DEFINE(display_stack, DISPLAY_STACK_SIZE);
@@ -212,8 +212,8 @@ int main(void)
 		LOG_ERR("UART init failed");
 	}
 
-	/* Manager applicatif : commandes UART (IQON/IQOFF, whitelist, chmap),
-	 * filtrage des connexions par whitelist, préparation du hot-swap chmap. */
+	/* Application manager: UART commands (IQON/IQOFF, whitelist, chmap),
+	 * connection filtering by whitelist, channel-map hot-swap staging. */
 	manager_init();
 	if_set_line_cb(manager_uart_line);
 
@@ -237,8 +237,8 @@ int main(void)
 			display_thread, NULL, NULL, NULL,
 			DISPLAY_PRIORITY, 0, K_NO_WAIT);
 
-	/* ── Init bloquant : on ne continue pas tant que les MAX_BEACONS
-	 *    réflecteurs ne sont pas connectés et sécurisés ─────────────── */
+	/* ── Blocking init: do not continue until the MAX_BEACONS reflectors
+	 *    are connected and secured ──────────────────────────────────── */
 	LOG_INF("Waiting for %d reflectors...", MAX_BEACONS);
 	err = pairing_wait_all_connected(K_FOREVER);
 	if (err) {
@@ -247,17 +247,16 @@ int main(void)
 	}
 	LOG_INF("All %d reflectors connected — starting application", MAX_BEACONS);
 
-	/* ── MESURE CONTINUE (free-running) ──────────────────────────────────────
-	 * Les procédures CS de chaque beacon sont armées UNE FOIS
-	 * (max_procedure_count = 0) : le contrôleur les répète ensuite tous les
-	 * procedure_interval sans nouveau handshake LL — le startup de ~495 ms
-	 * (≈ 11 × intervalle de connexion) n'est payé qu'à l'armement, plus
-	 * jamais par mesure. L'ancien pipeline one-shot payait ce startup à
-	 * CHAQUE mesure (cycle 3 beacons ≈ 1485 ms) ; ici la boucle ne fait que
-	 * collecter les paires (steps locaux + RAS pair) au fil de l'eau :
-	 * cycle ≈ période de procédure (~180 ms en drone N=3).
-	 * NOTE : pas de bt_conn_ref pendant la mesure (déconnexion en plein cycle
-	 * non protégée) — OK sur banc, à durcir pour la prod. */
+	/* ── CONTINUOUS MEASUREMENT (free-running) ───────────────────────────────
+	 * Each beacon's CS procedures are armed ONCE (max_procedure_count = 0):
+	 * the controller then repeats them every procedure_interval without a new
+	 * LL handshake — the ~495 ms startup (≈ 11 x connection interval) is paid
+	 * only at arming, never again per measurement. The old one-shot pipeline
+	 * paid this startup on EVERY measurement (3-beacon cycle ≈ 1485 ms); here
+	 * the loop only collects the pairs (local steps + peer RAS) as they come:
+	 * cycle ≈ procedure period (~180 ms in drone N=3).
+	 * NOTE: no bt_conn_ref during the measurement (a disconnect mid-cycle is
+	 * unprotected) — OK on the bench, to harden for production. */
 	cs_ranging_init();
 
 	bool armed[MAX_BEACONS] = { false };
@@ -267,9 +266,9 @@ int main(void)
 		bool any_collected = false;
 		int64_t t_cycle = k_uptime_get();
 
-		/* Round-robin simple sur tous les beacons (le scheduler a été
-		 * retiré : en free-running chaque lien mesure en continu, l'ordre
-		 * n'a pas d'effet sur la cadence). */
+		/* Simple round-robin over all beacons (the scheduler was removed:
+		 * in free-running each link measures continuously, the order has
+		 * no effect on the rate). */
 		for (int i = 0; i < MAX_BEACONS; i++) {
 			bool ready;
 
@@ -279,25 +278,25 @@ int main(void)
 			k_mutex_unlock(&beacons_mutex);
 
 			if (!ready) {
-				/* Déconnecté : le contrôleur a stoppé ses
-				 * procédures, il faudra ré-armer au retour. */
+				/* Disconnected: the controller has stopped its
+				 * procedures, we will re-arm on return. */
 				armed[i] = false;
 				continue;
 			}
 
-			/* Pas encore armé (démarrage, reconnexion, ou échec au
-			 * tour précédent) : armer et passer au suivant — la
-			 * première mesure arrive après le startup LL, pendant
-			 * que la boucle collecte les autres beacons. */
+			/* Not armed yet (startup, reconnection, or failure on
+			 * the previous round): arm and move on — the first
+			 * measurement arrives after the LL startup, while the
+			 * loop collects the other beacons. */
 			if (!armed[i]) {
 				armed[i] = (cs_enable_beacon(i) == 0);
 				enable_failed |= !armed[i];
 				continue;
 			}
 
-			/* Collecte de la prochaine mesure appariée + dump IQ
-			 * horodaté (IQL/IQP). Aucune distance : calcul déporté
-			 * hors carte (Python) à partir des lignes IQ. */
+			/* Collect the next paired measurement + timestamped IQ
+			 * dump (IQL/IQP). No distance: computed off-board
+			 * (Python) from the IQ lines. */
 			bool rearmed = true;
 			int rc = cs_collect_beacon(i, &rearmed);
 
@@ -313,9 +312,9 @@ int main(void)
 
 		LOG_INF("cycle: %lld ms", k_uptime_get() - t_cycle);
 
-		/* Backoff si rien n'a été collecté ce tour (tous déconnectés ou
-		 * juste armés) : évite un spin à vide. En nominal, la boucle est
-		 * cadencée par les sémaphores de collecte (cs_collect_beacon). */
+		/* Backoff if nothing was collected this round (all disconnected
+		 * or just armed): avoids a busy spin. In nominal operation the
+		 * loop is paced by the collection semaphores (cs_collect_beacon). */
 		if (enable_failed || !any_collected) {
 			k_sleep(K_MSEC(50));
 		}

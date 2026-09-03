@@ -1,31 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""cs_decoder.py — nettoyage + décodage du flux IQ de l'initiateur CS.
+"""cs_decoder.py — cleanup + decoding of the CS initiator IQ stream.
 
-Entrée : lignes UART brutes (live ou fichier) au format documenté dans
-IQ_DUMP.md :
-    IQL,<beacon>,<counter>,<t_ms>,<HEX>   (une ligne PAR SUBEVENT local)
-    IQP,<beacon>,<counter>,<t_ms>,<HEX>   (ranging data RAS du réflecteur)
+Input: raw UART lines (live or file) in the format documented in GUIDE.md (section 4):
+    IQL,<beacon>,<counter>,<t_ms>,<HEX>   (one line PER local SUBEVENT)
+    IQP,<beacon>,<counter>,<t_ms>,<HEX>   (reflector RAS ranging data)
 
-Sortie : objets `Measurement` COMPLETS et VALIDÉS — les deux moitiés (locale
-et réflecteur) de la même procédure, alignées canal par canal — prêts pour
-l'estimation de distance. Tout ce qui est corrompu, incomplet ou incohérent
-est écarté et compté (voir `DropStats`).
+Output: COMPLETE and VALIDATED `Measurement` objects — the two halves (local
+and reflector) of the same procedure, aligned channel by channel — ready for
+distance estimation. Anything corrupt, incomplete or inconsistent is dropped
+and counted (see `DropStats`).
 
-Usage bibliothèque (la fonction d'estimation est à la charge de l'appelant) :
+Library usage (the estimation function is the caller's responsibility):
 
     from cs_decoder import measurements_from_serial
 
     for m in measurements_from_serial("/dev/ttyACM0", 921600):
-        d = estimate(m)         # <- ta fonction
-        # m.tones : liste de ToneIQ triée par canal croissant
-        #   t.freq_hz             fréquence de la tonalité (Hz)
-        #   t.i_loc, t.q_loc      IQ mesuré par l'initiateur (12 bits signés)
-        #   t.i_ref, t.q_ref      IQ mesuré par le réflecteur
-        #   t.tq_loc, t.tq_ref    tone quality (0 = bon)
+        d = estimate(m)         # <- your function
+        # m.tones: list of ToneIQ sorted by increasing channel
+        #   t.freq_hz             tone frequency (Hz)
+        #   t.i_loc, t.q_loc      IQ measured by the initiator (12-bit signed)
+        #   t.i_ref, t.q_ref      IQ measured by the reflector
+        #   t.tq_loc, t.tq_ref    tone quality (0 = good)
         # m.rssi_loc / m.rssi_ref (dBm), m.t_ms, m.beacon, m.counter
 
-Usage CLI (contrôle du décodage, sans estimation) :
+CLI usage (decoding control, no estimation):
     python cs_decoder.py --file capture_raw.txt --stats
     python cs_decoder.py --port /dev/ttyACM0 --baud 921600 --stats
 """
@@ -37,15 +36,15 @@ import sys
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 
-# ── Constantes protocole ─────────────────────────────────────────────────────
+# ── Protocol constants ───────────────────────────────────────────────────────
 
-CS_CHANNEL_MAX = 78              # canaux CS valides : 0..78 (2402..2480 MHz)
-CS_FREQ_BASE_HZ = 2_402_000_000  # canal k -> 2402 + k MHz
+CS_CHANNEL_MAX = 78              # valid CS channels: 0..78 (2402..2480 MHz)
+CS_FREQ_BASE_HZ = 2_402_000_000  # channel k -> 2402 + k MHz
 
-# Tailles de data par mode, côté LOCAL (HCI, rôle initiateur).
-# mode 2 : 1 + (n_chemins+1)*4 -> tailles admises pour 1..4 chemins d'antenne.
+# Data sizes per mode, LOCAL side (HCI, initiator role).
+# mode 2: 1 + (n_paths+1)*4 -> allowed sizes for 1..4 antenna paths.
 LOCAL_MODE0_LEN = 5
-LOCAL_MODE1_LENS = (6, 14)       # 14 = avec sounding PCT (non utilisé ici)
+LOCAL_MODE1_LENS = (6, 14)       # 14 = with sounding PCT (not used here)
 LOCAL_MODE2_LENS = (9, 13, 17, 21)
 
 RAS_RANGING_HEADER_LEN = 4       # counter(12b)+config(4b), tx_power, aa_mask
@@ -54,7 +53,7 @@ RAS_SUBEVENT_HEADER_LEN = 8      # start_evt(2) freq_comp(2) done(1) abort(1)
 
 
 class DecodeError(ValueError):
-    """Ligne/payload structurellement invalide. `reason` alimente les stats."""
+    """Structurally invalid line/payload. `reason` feeds the stats."""
 
     def __init__(self, reason: str):
         super().__init__(reason)
@@ -66,14 +65,14 @@ class DecodeError(ValueError):
 @dataclass
 class Step:
     mode: int
-    channel: int          # -1 côté réflecteur (le RAS n'émet pas le canal)
+    channel: int          # -1 on the reflector side (RAS does not emit the channel)
     payload: bytes
     aborted: bool = False
 
 
 @dataclass
 class ToneIQ:
-    """Une tonalité PBR appariée : les deux moitiés du même step mode 2."""
+    """One paired PBR tone: the two halves of the same mode-2 step."""
     channel: int
     freq_hz: float
     i_loc: int
@@ -86,26 +85,26 @@ class ToneIQ:
 
 @dataclass
 class Measurement:
-    """Une procédure CS complète, validée et alignée."""
+    """A complete, validated and aligned CS procedure."""
     beacon: int
     counter: int
-    t_ms: int                    # k_uptime carte à l'arrivée du 1er subevent
-    t_done_ms: int               # k_uptime carte à la fin de procédure (IQP)
-    tones: list[ToneIQ]          # triées par canal croissant
-    rssi_loc: int                # dBm, 1er step mode 0 local (127 = indispo)
-    rssi_ref: int                # dBm, 1er step mode 0 réflecteur (127 = indispo)
-    freq_offset_raw: int         # offset fréquence mode 0 local (brut, 16 bits)
-    n_subevents: int             # nb de lignes IQL agrégées
-    # Steps RTT (mode 1) : paires (ToA-ToD initiateur, ToD-ToA réflecteur) en
-    # unités de 0,5 ns. Temps de vol τ = (Ti - Tr)/2 -> d = (Ti - Tr)·0,075 m.
-    # Grossier (~mètres) mais SANS repliement : sert à lever l'ambiguïté 50 m
-    # de la phase. Steps au sentinel 0x8000 (indisponible) déjà écartés.
+    t_ms: int                    # board k_uptime at the arrival of the 1st subevent
+    t_done_ms: int               # board k_uptime at the procedure end (IQP)
+    tones: list[ToneIQ]          # sorted by increasing channel
+    rssi_loc: int                # dBm, 1st local mode-0 step (127 = unavailable)
+    rssi_ref: int                # dBm, 1st reflector mode-0 step (127 = unavailable)
+    freq_offset_raw: int         # local mode-0 frequency offset (raw, 16 bits)
+    n_subevents: int             # number of aggregated IQL lines
+    # RTT steps (mode 1): pairs (ToA-ToD initiator, ToD-ToA reflector) in units
+    # of 0.5 ns. Time of flight tau = (Ti - Tr)/2 -> d = (Ti - Tr)*0.075 m.
+    # Coarse (~meters) but WITHOUT aliasing: used to resolve the phase's 50 m
+    # ambiguity. Steps at the 0x8000 sentinel (unavailable) already dropped.
     rtt_pairs: list[tuple[int, int]] = field(default_factory=list)
 
 
 @dataclass
 class DropStats:
-    """Comptage de tout ce qui n'a pas fini en Measurement."""
+    """Count of everything that did not end up as a Measurement."""
     lines: int = 0
     measurements: int = 0
     dropped: Counter = field(default_factory=Counter)
@@ -115,62 +114,62 @@ class DropStats:
 
     def summary(self) -> str:
         total_drop = sum(self.dropped.values())
-        out = [f"{self.lines} lignes -> {self.measurements} mesures complètes, "
-               f"{total_drop} rejets"]
+        out = [f"{self.lines} lines -> {self.measurements} complete measurements, "
+               f"{total_drop} drops"]
         for reason, n in self.dropped.most_common():
             out.append(f"  {reason}: {n}")
         return "\n".join(out)
 
 
-# ── Étage 1 : enveloppe ASCII ────────────────────────────────────────────────
+# ── Stage 1: ASCII envelope ──────────────────────────────────────────────────
 
 def parse_envelope(line: str):
-    """'IQL,b,rc,t,HEX' -> (tag, beacon, counter, t_ms, bytes). DecodeError sinon."""
+    """'IQL,b,rc,t,HEX' -> (tag, beacon, counter, t_ms, bytes). DecodeError otherwise."""
     parts = line.split(",", 4)
     if len(parts) != 5 or parts[0] not in ("IQL", "IQP"):
-        raise DecodeError("enveloppe")
+        raise DecodeError("envelope")
     try:
         beacon, counter, t_ms = int(parts[1]), int(parts[2]), int(parts[3])
     except ValueError:
-        raise DecodeError("enveloppe") from None
+        raise DecodeError("envelope") from None
     hexstr = parts[4].strip()
     if not hexstr or len(hexstr) % 2:
-        raise DecodeError("hex-impair")
+        raise DecodeError("hex-odd")
     try:
         data = bytes.fromhex(hexstr)
     except ValueError:
-        raise DecodeError("hex-invalide") from None
-    # fromhex tolère les espaces : les refuser explicitement
+        raise DecodeError("hex-invalid") from None
+    # fromhex tolerates spaces: reject them explicitly
     if " " in hexstr:
-        raise DecodeError("hex-invalide")
+        raise DecodeError("hex-invalid")
     return parts[0], beacon, counter, t_ms, data
 
 
-# ── Étage 2a : steps locaux (format HCI : mode|canal|len|data) ───────────────
+# ── Stage 2a: local steps (HCI format: mode|channel|len|data) ────────────────
 
 def decode_local_steps(data: bytes) -> list[Step]:
     steps, pos = [], 0
     while pos + 3 <= len(data):
         mode, chan, dlen = data[pos], data[pos + 1], data[pos + 2]
         if chan > CS_CHANNEL_MAX:
-            raise DecodeError("iql-canal")
+            raise DecodeError("iql-channel")
         if (mode == 0 and dlen != LOCAL_MODE0_LEN) or \
            (mode == 1 and dlen not in LOCAL_MODE1_LENS) or \
            (mode == 2 and dlen not in LOCAL_MODE2_LENS) or mode > 2:
             raise DecodeError("iql-mode-len")
         payload = data[pos + 3:pos + 3 + dlen]
         if len(payload) < dlen:
-            raise DecodeError("iql-tronque")
+            raise DecodeError("iql-truncated")
         steps.append(Step(mode, chan, payload))
         pos += 3 + dlen
     if pos != len(data):
-        raise DecodeError("iql-reliquat")
+        raise DecodeError("iql-leftover")
     if not steps:
-        raise DecodeError("iql-vide")
+        raise DecodeError("iql-empty")
     return steps
 
 
-# ── Étage 2b : ranging data RAS du réflecteur ────────────────────────────────
+# ── Stage 2b: reflector RAS ranging data ─────────────────────────────────────
 
 def _peer_step_sizes(aa_mask: int) -> dict[int, int]:
     n_ap = bin(aa_mask).count("1")
@@ -180,12 +179,12 @@ def _peer_step_sizes(aa_mask: int) -> dict[int, int]:
 
 
 def decode_peer(data: bytes):
-    """RAS ranging data -> (counter12, [Step...]). Structure :
-    en-tête ranging (4 o), puis par subevent : en-tête (8 o) + num_steps steps
-    'mode(1)|data', SANS canal ni champ len (taille implicite du mode).
-    Un step au bit 7 du mode levé est avorté et ne porte pas de data."""
+    """RAS ranging data -> (counter12, [Step...]). Structure:
+    ranging header (4 bytes), then per subevent: header (8 bytes) + num_steps
+    steps 'mode(1)|data', WITHOUT channel or len field (size implied by mode).
+    A step with mode bit 7 set is aborted and carries no data."""
     if len(data) < RAS_RANGING_HEADER_LEN + RAS_SUBEVENT_HEADER_LEN:
-        raise DecodeError("iqp-court")
+        raise DecodeError("iqp-short")
     counter12 = int.from_bytes(data[0:2], "little") & 0x0FFF
     aa_mask = data[3]
     sizes = _peer_step_sizes(aa_mask)
@@ -193,12 +192,12 @@ def decode_peer(data: bytes):
     steps, pos = [], RAS_RANGING_HEADER_LEN
     while pos < len(data):
         if pos + RAS_SUBEVENT_HEADER_LEN > len(data):
-            raise DecodeError("iqp-header-tronque")
+            raise DecodeError("iqp-header-truncated")
         num_steps = data[pos + 7]
         pos += RAS_SUBEVENT_HEADER_LEN
         for _ in range(num_steps):
             if pos >= len(data):
-                raise DecodeError("iqp-steps-manquants")
+                raise DecodeError("iqp-steps-missing")
             mode_byte = data[pos]
             pos += 1
             aborted = bool(mode_byte & 0x80)
@@ -210,17 +209,17 @@ def decode_peer(data: bytes):
                 continue
             payload = data[pos:pos + sizes[mode]]
             if len(payload) < sizes[mode]:
-                raise DecodeError("iqp-step-tronque")
+                raise DecodeError("iqp-step-truncated")
             steps.append(Step(mode, -1, payload))
             pos += sizes[mode]
     if pos != len(data):
-        raise DecodeError("iqp-reliquat")
+        raise DecodeError("iqp-leftover")
     if not steps:
-        raise DecodeError("iqp-vide")
+        raise DecodeError("iqp-empty")
     return counter12, steps
 
 
-# ── Étage 3 : décodage des payloads ──────────────────────────────────────────
+# ── Stage 3: payload decoding ────────────────────────────────────────────────
 
 def _s12(v: int) -> int:
     return v - 4096 if v >= 2048 else v
@@ -231,28 +230,28 @@ def _s8(v: int) -> int:
 
 
 def pct_to_iq(pct3: bytes) -> tuple[int, int]:
-    """PCT 24 bits little-endian -> (I, Q) 12 bits signés."""
+    """PCT 24-bit little-endian -> (I, Q) 12-bit signed."""
     v = int.from_bytes(pct3, "little")
     return _s12(v & 0xFFF), _s12(v >> 12)
 
 
 def mode2_first_path(payload: bytes) -> tuple[int, int, int]:
-    """(I, Q, tone_quality) du 1er chemin d'antenne (slot d'extension ignoré)."""
+    """(I, Q, tone_quality) of the 1st antenna path (extension slot ignored)."""
     i, q = pct_to_iq(payload[1:4])
     return i, q, payload[4]
 
 
-# ── Étage 4 : appariement local <-> réflecteur ───────────────────────────────
+# ── Stage 4: local <-> reflector pairing ─────────────────────────────────────
 
 def _build_measurement(beacon, counter, iqls, peer_steps, t_done_ms) -> Measurement:
-    """Fusionne les subevents locaux et la moitié pair. DecodeError si les
-    séquences de modes ne se correspondent pas step à step."""
+    """Merge the local subevents and the peer half. DecodeError if the mode
+    sequences do not match step by step."""
     local_steps: list[Step] = []
     for _t, steps in iqls:
         local_steps.extend(steps)
 
     if [s.mode for s in local_steps] != [s.mode for s in peer_steps]:
-        raise DecodeError("seq-desalignee")
+        raise DecodeError("seq-misaligned")
 
     tones, rssi_loc, rssi_ref, freq_off = [], None, None, None
     rtt_pairs = []
@@ -264,10 +263,10 @@ def _build_measurement(beacon, counter, iqls, peer_steps, t_done_ms) -> Measurem
             if rssi_ref is None and not ref.aborted:
                 rssi_ref = _s8(ref.payload[1])
         elif loc.mode == 1 and not ref.aborted:
-            # payload : quality(1) NADM(1) RSSI(1) ToX(2 LE signé) antenne(1)
+            # payload: quality(1) NADM(1) RSSI(1) ToX(2 LE signed) antenna(1)
             t_i = int.from_bytes(loc.payload[3:5], "little", signed=True)
             t_r = int.from_bytes(ref.payload[3:5], "little", signed=True)
-            if t_i != -0x8000 and t_r != -0x8000:   # 0x8000 = indisponible
+            if t_i != -0x8000 and t_r != -0x8000:   # 0x8000 = unavailable
                 rtt_pairs.append((t_i, t_r))
         elif loc.mode == 2 and not ref.aborted:
             i_l, q_l, tq_l = mode2_first_path(loc.payload)
@@ -276,7 +275,7 @@ def _build_measurement(beacon, counter, iqls, peer_steps, t_done_ms) -> Measurem
                                 CS_FREQ_BASE_HZ + loc.channel * 1_000_000,
                                 i_l, q_l, tq_l, i_r, q_r, tq_r))
     if rssi_loc is None or rssi_ref is None or not tones:
-        raise DecodeError("mesure-incomplete")
+        raise DecodeError("measurement-incomplete")
 
     tones.sort(key=lambda t: t.channel)
     return Measurement(beacon=beacon, counter=counter, t_ms=iqls[0][0],
@@ -286,12 +285,12 @@ def _build_measurement(beacon, counter, iqls, peer_steps, t_done_ms) -> Measurem
 
 
 class Pairer:
-    """Accumule les lignes et produit les mesures complètes.
+    """Accumulates the lines and produces the complete measurements.
 
-    Le firmware émet, par procédure : les IQL (un par subevent) PUIS l'IQP du
-    même compteur — l'arrivée de l'IQP déclenche donc l'assemblage. Les
-    procédures dont une moitié s'est perdue (ligne corrompue) sont évincées
-    quand le compteur du beacon a avancé de MAX_LAG."""
+    The firmware emits, per procedure: the IQLs (one per subevent) THEN the IQP
+    of the same counter — so the arrival of the IQP triggers the assembly.
+    Procedures whose one half was lost (corrupt line) are evicted when the
+    beacon's counter has advanced by MAX_LAG."""
 
     MAX_LAG = 4
 
@@ -303,10 +302,10 @@ class Pairer:
         for key in list(self.pending):
             if key[0] == beacon and ((counter - key[1]) & 0xFFF) > self.MAX_LAG:
                 del self.pending[key]
-                self.stats.drop("moitie-pair-perdue")
+                self.stats.drop("peer-half-lost")
 
     def feed(self, line: str):
-        """Une ligne UART -> Measurement complet ou None."""
+        """One UART line -> complete Measurement or None."""
         self.stats.lines += 1
         try:
             tag, beacon, counter, t_ms, data = parse_envelope(line)
@@ -319,11 +318,11 @@ class Pairer:
 
             counter12, peer_steps = decode_peer(data)
             if counter12 != counter & 0xFFF:
-                raise DecodeError("iqp-counter-croise")
+                raise DecodeError("iqp-counter-crossed")
             key = (beacon, counter12)
             iqls = self.pending.pop(key, None)
             if iqls is None:
-                raise DecodeError("moitie-locale-perdue")
+                raise DecodeError("local-half-lost")
             m = _build_measurement(beacon, counter, iqls, peer_steps, t_ms)
             self.stats.measurements += 1
             return m
@@ -332,10 +331,10 @@ class Pairer:
             return None
 
 
-# ── Sources : fichier, port série ────────────────────────────────────────────
+# ── Sources: file, serial port ───────────────────────────────────────────────
 
 def measurements_from_lines(lines, stats: DropStats | None = None):
-    """Générateur de Measurement depuis un itérable de lignes texte."""
+    """Generator of Measurement from an iterable of text lines."""
     pairer = Pairer(stats if stats is not None else DropStats())
     for line in lines:
         line = line.strip()
@@ -346,7 +345,7 @@ def measurements_from_lines(lines, stats: DropStats | None = None):
 
 
 def measurements_from_serial(port: str, baud: int, stats: DropStats | None = None):
-    """Générateur de Measurement depuis l'UART data (reconnexion automatique)."""
+    """Generator of Measurement from the data UART (automatic reconnection)."""
     import time
     import serial
 
@@ -360,7 +359,7 @@ def measurements_from_serial(port: str, baud: int, stats: DropStats | None = Non
                     buf += ser.read(4096)
                     while b"\n" in buf:
                         raw, buf = buf.split(b"\n", 1)
-                        if first:       # première ligne partielle : ignorer
+                        if first:       # first partial line: ignore
                             first = False
                             continue
                         line = raw.decode("ascii", "replace").strip()
@@ -369,21 +368,21 @@ def measurements_from_serial(port: str, baud: int, stats: DropStats | None = Non
                             if m is not None:
                                 yield m
         except serial.SerialException as e:
-            print(f"[port perdu] {e} — retente dans 2 s", file=sys.stderr)
+            print(f"[port lost] {e} — retrying in 2 s", file=sys.stderr)
             time.sleep(2)
 
 
-# ── CLI de contrôle ──────────────────────────────────────────────────────────
+# ── Control CLI ──────────────────────────────────────────────────────────────
 
 def main():
-    ap = argparse.ArgumentParser(description="Décodage/nettoyage du flux IQ CS")
+    ap = argparse.ArgumentParser(description="Decode/clean the CS IQ stream")
     src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--file", help="rejouer un fichier de lignes UART brutes")
-    src.add_argument("--port", help="port série (ex. /dev/ttyACM0)")
+    src.add_argument("--file", help="replay a file of raw UART lines")
+    src.add_argument("--port", help="serial port (e.g. /dev/ttyACM0)")
     ap.add_argument("--baud", type=int, default=921600)
     ap.add_argument("--stats", action="store_true",
-                    help="afficher le bilan des rejets à la fin (--file) ou "
-                         "toutes les 50 mesures (--port)")
+                    help="print the drop summary at the end (--file) or "
+                         "every 50 measurements (--port)")
     args = ap.parse_args()
 
     stats = DropStats()

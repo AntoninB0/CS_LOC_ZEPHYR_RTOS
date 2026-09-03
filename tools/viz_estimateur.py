@@ -1,36 +1,36 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-viz_estimateur.py — figures diagnostiques de l'estimateur pour ILLUSTRER
-l'incertitude et le multipath, à partir des mêmes données que la chaîne live.
+viz_estimateur.py — estimator diagnostic figures to ILLUSTRATE uncertainty and
+multipath, from the same data as the live chain.
 
-Pour une (ou plusieurs) mesure CS, trace trois panneaux :
-  1. Profil de retard IFFT |IFFT(H)| vs distance — chaque PIC = un trajet
-     (direct + réflexions). Le multipath se voit directement : plusieurs pics,
-     et parfois une réflexion plus haute que le direct (source du biais).
-  2. Vraisemblance bayésienne par lobe d'alias — score find_amp() à chaque lobe
-     candidat sur [0, R_MAX]. Montre l'AMBIGUÏTÉ : le lobe gagnant et ses
-     poursuivants ; à faible SNR le mauvais lobe peut passer devant.
-  3. Zoom sur le lobe retenu — largeur du pic = incertitude de phase (~cm).
+For one (or several) CS measurement, it plots three panels:
+  1. IFFT delay profile |IFFT(H)| vs distance — each PEAK = one path (direct +
+     reflections). Multipath is directly visible: several peaks, and sometimes a
+     reflection higher than the direct one (source of the bias).
+  2. Bayesian likelihood per alias lobe — find_amp() score at each candidate lobe
+     over [0, R_MAX]. Shows the AMBIGUITY: the winning lobe and its runners-up;
+     at low SNR the wrong lobe can come out ahead.
+  3. Zoom on the selected lobe — peak width = phase uncertainty (~cm).
 
-Ce script NE MODIFIE PAS estimation.py : il réutilise ses fonctions publiques
-(find_amp, calcIFFTDist, gradient_refine, naboer_global3, lobe_period) et le
-décodeur cs_decoder, exactement comme uart_console. Les distances marquées sont
-donc celles de TON estimateur (avant RTT/calibration/médiane, non tracés).
+This script DOES NOT MODIFY estimation.py: it reuses its public functions
+(find_amp, calcIFFTDist, gradient_refine, naboer_global3, lobe_period) and the
+cs_decoder decoder, exactly like uart_console. The marked distances are
+therefore those of YOUR estimator (before RTT/calibration/median, not plotted).
 
-Usage :
-  python viz_estimateur.py --file capture_ref_921600.txt         # 1 fig/beacon (mesure médiane)
-  python viz_estimateur.py --json test_XXXX/test_XXXX.json       # depuis un test enrichi (champ iq)
+Usage:
+  python viz_estimateur.py --file capture_ref_921600.txt         # 1 fig/beacon (median measurement)
+  python viz_estimateur.py --json test_XXXX/test_XXXX.json       # from an enriched test (iq field)
   python viz_estimateur.py --file capture.txt --beacon 0 --counter 42
-  python viz_estimateur.py --file capture.txt --worst            # la mesure la plus aberrante/beacon
-  python viz_estimateur.py --file capture.txt --index 10         # la 10e mesure valide
-  python viz_estimateur.py --port /dev/ttyACM0 --collect 40      # capture live puis figures
+  python viz_estimateur.py --file capture.txt --worst            # the most outlier measurement/beacon
+  python viz_estimateur.py --file capture.txt --index 10         # the 10th valid measurement
+  python viz_estimateur.py --port /dev/ttyACM0 --collect 40      # live capture then figures
 
-⚠ --json ne marche que sur les tests ENREGISTRÉS AVEC IQ (champ "iq", ajouté
-récemment à uart_console). Les tests plus anciens n'ont que les distances.
+⚠ --json only works on tests RECORDED WITH IQ (the "iq" field, added recently to
+uart_console). Older tests only have the distances.
 
-Sorties : dossier horodaté viz_AAAAMMJJ_HHMMSS/ avec un PNG par mesure tracée.
-Dépendances : numpy, scipy, matplotlib (venv tools : voir install.txt).
+Outputs: timestamped folder viz_YYYYMMDD_HHMMSS/ with one PNG per plotted measurement.
+Dependencies: numpy, scipy, matplotlib (tools venv: see install.txt).
 """
 
 import argparse
@@ -47,10 +47,10 @@ import estimation as est
 
 try:
     import matplotlib
-    matplotlib.use("Agg")                 # rendu fichier, sans écran
+    matplotlib.use("Agg")                 # file rendering, headless
     import matplotlib.pyplot as plt
 except ImportError:
-    sys.exit("matplotlib absent. Active le venv : cd tools && source .venv/bin/activate "
+    sys.exit("matplotlib missing. Activate the venv: cd tools && source .venv/bin/activate "
              "&& pip install -r install.txt")
 
 try:
@@ -59,11 +59,11 @@ except ImportError:
     find_peaks = None
 
 
-# ── Reprise fidèle de la préparation d'entrée de estimation.estimate() ────────
-# (mêmes lignes que estimate() : si tu changes le filtre de tones là-bas,
-#  reporte-le ici pour que les figures collent au live.)
+# ── Faithful reuse of the input preparation of estimation.estimate() ──────────
+# (same lines as estimate(): if you change the tone filter over there, mirror it
+#  here so the figures match the live chain.)
 def prepare(m):
-    """Mesure -> tones valides (ch, f, transfer2, ang1, ang2) ou None."""
+    """Measurement -> valid tones (ch, f, transfer2, ang1, ang2) or None."""
     ch  = np.array([t.channel for t in m.tones])
     Y_I = np.array([complex(t.i_loc, t.q_loc) for t in m.tones])
     Y_R = np.array([complex(t.i_ref, t.q_ref) for t in m.tones])
@@ -86,17 +86,17 @@ def prepare(m):
 
 
 def ifft_profile(ch, t2, n=2048):
-    """Profil de retard : mirror de estimation.calcIFFTDist, mais renvoie la
-    COURBE complète (x en mètres, |IFFT|) et l'argmax (= d_ifft de l'estimateur)."""
+    """Delay profile: mirror of estimation.calcIFFTDist, but returns the full
+    CURVE (x in meters, |IFFT|) and the argmax (= the estimator's d_ifft)."""
     H = np.zeros(79, dtype=complex)
     H[ch] = t2
     yf = np.abs(np.fft.ifft(H, n=n)[:n // 2])
-    x = np.arange(n // 2) * est.C / (2 * n * 1e6)     # 1e6 = pas de grille (1 MHz)
+    x = np.arange(n // 2) * est.C / (2 * n * 1e6)     # 1e6 = grid step (1 MHz)
     return x, yf, x[int(np.argmax(yf))]
 
 
 def bayes_candidates(first_est, f, ang1, ang2):
-    """Comb de lobes candidats de naboer_global3 sur [0, R_MAX] et leur score."""
+    """naboer_global3's comb of candidate lobes over [0, R_MAX] and their scores."""
     period = est.lobe_period(f)
     kmin = math.ceil((0.0 - first_est) / period)
     kmax = math.floor((est.R_MAX - first_est) / period)
@@ -108,75 +108,75 @@ def bayes_candidates(first_est, f, ang1, ang2):
 
 
 def plot_measurement(m, outpath, rmax_view=40.0):
-    """Trace les 3 panneaux pour la mesure m. Renvoie (d_ifft, d_bay) ou None."""
+    """Plot the 3 panels for measurement m. Returns (d_ifft, d_bay) or None."""
     p = prepare(m)
     if p is None:
         return None
     ch, f, t2, ang1, ang2 = p["ch"], p["f"], p["t2"], p["ang1"], p["ang2"]
 
-    # Pipeline de TON estimateur (étapes 1-3), pour marquer les mêmes distances.
+    # YOUR estimator's pipeline (steps 1-3), to mark the same distances.
     x, yf, d_ifft = ifft_profile(ch, t2)
-    d_first = est.gradient_refine(ang1, ang2, f, d_ifft)      # first_est de naboer
+    d_first = est.gradient_refine(ang1, ang2, f, d_ifft)      # naboer's first_est
     d_bay = est.naboer_global3(ang1, ang2, f, d_first)
     cand, scores, period = bayes_candidates(d_first, f, ang1, ang2)
 
     fig, ax = plt.subplots(3, 1, figsize=(10, 9))
 
-    # 1) Profil de retard IFFT — multipath = pics multiples
+    # 1) IFFT delay profile — multipath = multiple peaks
     ax[0].plot(x, yf, lw=1.1)
     ax[0].axvline(d_ifft, color="tab:red", ls="--", lw=1.2,
                   label=f"argmax IFFT = {d_ifft:.2f} m")
     ax[0].axvline(d_bay, color="tab:green", ls="-", lw=1.2,
-                  label=f"bayésien = {d_bay:.2f} m")
+                  label=f"Bayesian = {d_bay:.2f} m")
     if find_peaks is not None and yf.max() > 0:
         pk, _ = find_peaks(yf, height=0.25 * yf.max(), distance=8)
         for i in pk[:6]:
             ax[0].annotate(f"{x[i]:.1f} m", (x[i], yf[i]), fontsize=7,
                            textcoords="offset points", xytext=(0, 3),
                            ha="center", color="dimgray")
-    # Vue élargie si besoin pour que l'argmax IFFT (souvent une réflexion
-    # lointaine que le bayésien corrige) reste visible dans le cadre.
+    # Widen the view if needed so the IFFT argmax (often a distant reflection
+    # that the Bayesian corrects) stays visible in the frame.
     view = min(max(rmax_view, 1.15 * max(d_ifft, d_bay)), float(x.max()))
     ax[0].set_xlim(0, view)
     ax[0].set_xlabel("distance (m)"); ax[0].set_ylabel("|IFFT|")
-    ax[0].set_title("Profil de retard (IFFT) — chaque pic = un trajet "
+    ax[0].set_title("Delay profile (IFFT) — each peak = one path "
                     "(direct + multipath)")
     ax[0].legend(fontsize=8); ax[0].grid(True, alpha=0.3)
 
-    # 2) Vraisemblance par lobe d'alias — ambiguïté
+    # 2) Likelihood per alias lobe — ambiguity
     ax[1].vlines(cand, scores.min(), scores, color="tab:blue", alpha=0.35, lw=0.8)
     ax[1].plot(cand, scores, ".", ms=4, color="tab:blue")
     i_best = int(np.argmax(scores))
     ax[1].plot(cand[i_best], scores[i_best], "o", ms=9, mfc="none",
-               mec="tab:red", mew=1.6, label=f"lobe gagnant ≈ {cand[i_best]:.2f} m")
+               mec="tab:red", mew=1.6, label=f"winning lobe ≈ {cand[i_best]:.2f} m")
     ax[1].axvline(d_bay, color="tab:green", ls="-", lw=1.0)
     ax[1].set_xlim(0, est.R_MAX)
-    ax[1].set_xlabel("distance candidate (m)"); ax[1].set_ylabel("log-vraisemblance")
-    ax[1].set_title(f"Vraisemblance par lobe d'alias (pas {period*100:.1f} cm) — "
-                    "hauteur = plausibilité ; écart gagnant/2e = marge d'ambiguïté")
+    ax[1].set_xlabel("candidate distance (m)"); ax[1].set_ylabel("log-likelihood")
+    ax[1].set_title(f"Likelihood per alias lobe (spacing {period*100:.1f} cm) — "
+                    "height = plausibility; winner/2nd gap = ambiguity margin")
     ax[1].legend(fontsize=8); ax[1].grid(True, alpha=0.3)
 
-    # 3) Zoom lobe retenu — incertitude de phase
+    # 3) Zoom on the selected lobe — phase uncertainty
     rr = np.linspace(d_bay - 5 * period, d_bay + 5 * period, 800)
     sc = est.find_amp(rr, f, ang1, ang2)
     ax[2].plot(rr, sc, lw=1.1)
     ax[2].axvline(d_bay, color="tab:green", ls="-", lw=1.2,
-                  label=f"bayésien = {d_bay:.3f} m")
-    ax[2].set_xlabel("distance (m)"); ax[2].set_ylabel("log-vraisemblance")
-    ax[2].set_title(f"Zoom sur le lobe retenu — largeur ≈ incertitude de phase "
-                    f"(pas de lobe {period*100:.1f} cm)")
+                  label=f"Bayesian = {d_bay:.3f} m")
+    ax[2].set_xlabel("distance (m)"); ax[2].set_ylabel("log-likelihood")
+    ax[2].set_title(f"Zoom on the selected lobe — width ≈ phase uncertainty "
+                    f"(lobe spacing {period*100:.1f} cm)")
     ax[2].legend(fontsize=8); ax[2].grid(True, alpha=0.3)
 
-    fig.suptitle(f"b{m.beacon}  rc={m.counter}  |  {p['n_valid']}/{p['n_tones']} tones valides  "
+    fig.suptitle(f"b{m.beacon}  rc={m.counter}  |  {p['n_valid']}/{p['n_tones']} valid tones  "
                  f"|  RSSI {m.rssi_loc}/{m.rssi_ref} dBm  |  "
-                 f"IFFT={d_ifft:.2f} m  bayésien={d_bay:.2f} m", fontsize=11)
+                 f"IFFT={d_ifft:.2f} m  Bayesian={d_bay:.2f} m", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     fig.savefig(outpath, dpi=120)
     plt.close(fig)
     return d_ifft, d_bay
 
 
-# ── Collecte des mesures (fichier ou live) ───────────────────────────────────
+# ── Measurement collection (file or live) ─────────────────────────────────────
 
 def measurements_from_file(path, beacon=None):
     stats = DropStats()
@@ -194,11 +194,11 @@ def measurements_from_file(path, beacon=None):
     return out
 
 
-# ── Reconstruction depuis un JSON de test enrichi (champ "iq" par mesure) ────
-# Le JSON de --test stocke, par mesure, iq = [[canal, i_loc, q_loc, i_ref,
-# q_ref, tq_loc, tq_ref], ...]. On rebâtit des objets minimalistes compatibles
-# avec prepare()/plot_measurement() (mêmes attributs que cs_decoder.ToneIQ /
-# Measurement, hors RTT non nécessaire aux figures).
+# ── Reconstruction from an enriched test JSON ("iq" field per measurement) ────
+# The --test JSON stores, per measurement, iq = [[channel, i_loc, q_loc, i_ref,
+# q_ref, tq_loc, tq_ref], ...]. We rebuild minimal objects compatible with
+# prepare()/plot_measurement() (same attributes as cs_decoder.ToneIQ /
+# Measurement, minus the RTT not needed for the figures).
 class _Tone:
     __slots__ = ("channel", "freq_hz", "i_loc", "q_loc", "tq_loc",
                  "i_ref", "q_ref", "tq_ref")
@@ -221,7 +221,7 @@ class _Meas:
 
 
 def meas_from_record(beacon, r):
-    """Construit un _Meas depuis un enregistrement JSON (doit contenir 'iq')."""
+    """Build a _Meas from a JSON record (must contain 'iq')."""
     return _Meas(beacon, r.get("counter"), r.get("t_ms"),
                  r.get("rssi_loc"), r.get("rssi_ref"),
                  [_Tone(*t) for t in r["iq"]])
@@ -241,9 +241,9 @@ def measurements_from_json(path, beacon=None):
             else:
                 n_no_iq += 1
     if not out:
-        sys.exit(f"{path} : aucune mesure avec IQ (champ 'iq'). "
-                 f"{'Ce test est antérieur au stockage des IQ.' if n_no_iq else ''} "
-                 "Régénère depuis un --test récent ou une capture brute (--file).")
+        sys.exit(f"{path}: no measurement with IQ (the 'iq' field). "
+                 f"{'This test predates IQ storage.' if n_no_iq else ''} "
+                 "Regenerate from a recent --test or a raw capture (--file).")
     return out
 
 
@@ -255,7 +255,7 @@ def measurements_from_port(port, baud, secs, beacon=None):
     deadline = time.time() + secs
     buf = b""
     with serial.Serial(port, baud, timeout=0.2) as ser:
-        print(f"[capture {secs} s sur {port} @ {baud}]", file=sys.stderr)
+        print(f"[capture {secs} s on {port} @ {baud}]", file=sys.stderr)
         while time.time() < deadline:
             buf += ser.read(4096)
             while b"\n" in buf:
@@ -270,10 +270,10 @@ def measurements_from_port(port, baud, secs, beacon=None):
     return out
 
 
-# ── Sélection des mesures à tracer ───────────────────────────────────────────
+# ── Selection of the measurements to plot ─────────────────────────────────────
 
 def select(meas, args):
-    """Renvoie la liste des mesures à tracer selon les options."""
+    """Return the list of measurements to plot according to the options."""
     if args.counter is not None:
         sel = [m for m in meas if m.counter == args.counter
                and (args.beacon is None or m.beacon == args.beacon)]
@@ -281,9 +281,10 @@ def select(meas, args):
     if args.index is not None:
         return [meas[args.index]] if 0 <= args.index < len(meas) else []
 
-    # Par défaut / --worst : une mesure REPRÉSENTATIVE par beacon. On estime
-    # d_bay de chaque mesure (via l'estimateur) puis on prend la médiane (cas
-    # typique) ou le plus grand écart à cette médiane (--worst, cas multipath).
+    # Default / --worst: one REPRESENTATIVE measurement per beacon. We estimate
+    # d_bay of each measurement (via the estimator) then take the median
+    # (typical case) or the largest deviation from that median (--worst,
+    # multipath case).
     by_beacon = {}
     for m in meas:
         p = prepare(m)
@@ -296,7 +297,7 @@ def select(meas, args):
     chosen = []
     for b, lst in sorted(by_beacon.items()):
         med = float(np.median([d for d, _ in lst]))
-        # typique = mesure la plus PROCHE de la médiane ; --worst = la plus loin
+        # typical = measurement CLOSEST to the median; --worst = the farthest
         dist_to_med = lambda dm: abs(dm[0] - med)      # noqa: E731
         pick = max(lst, key=dist_to_med) if args.worst else min(lst, key=dist_to_med)
         chosen.append(pick[1])
@@ -305,21 +306,21 @@ def select(meas, args):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Figures IFFT + bayésien (incertitude / multipath)")
+        description="IFFT + Bayesian figures (uncertainty / multipath)")
     src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--file", help="capture brute (lignes IQL/IQP)")
-    src.add_argument("--json", help="JSON de test enrichi (champ 'iq' par mesure)")
-    src.add_argument("--port", help="capture live puis figures")
+    src.add_argument("--file", help="raw capture (IQL/IQP lines)")
+    src.add_argument("--json", help="enriched test JSON ('iq' field per measurement)")
+    src.add_argument("--port", help="live capture then figures")
     ap.add_argument("--baud", type=int, default=921600)
-    ap.add_argument("--collect", type=int, default=30, help="durée capture live (s)")
-    ap.add_argument("--beacon", type=int, help="ne garder qu'un beacon")
-    ap.add_argument("--counter", type=int, help="tracer une procédure précise")
-    ap.add_argument("--index", type=int, help="tracer la k-ème mesure valide")
+    ap.add_argument("--collect", type=int, default=30, help="live capture duration (s)")
+    ap.add_argument("--beacon", type=int, help="keep only one beacon")
+    ap.add_argument("--counter", type=int, help="plot a specific procedure")
+    ap.add_argument("--index", type=int, help="plot the k-th valid measurement")
     ap.add_argument("--worst", action="store_true",
-                    help="tracer la mesure la plus aberrante par beacon (cas multipath)")
+                    help="plot the most outlier measurement per beacon (multipath case)")
     ap.add_argument("--rmax-view", type=float, default=40.0,
-                    help="distance max affichée dans le profil IFFT (m)")
-    ap.add_argument("--out", help="dossier de sortie (défaut viz_horodaté)")
+                    help="max distance shown in the IFFT profile (m)")
+    ap.add_argument("--out", help="output folder (default viz_timestamped)")
     args = ap.parse_args()
 
     if args.file:
@@ -329,11 +330,11 @@ def main():
     else:
         meas = measurements_from_port(args.port, args.baud, args.collect, args.beacon)
     if not meas:
-        sys.exit("Aucune mesure complète dans l'entrée.")
+        sys.exit("No complete measurement in the input.")
 
     sel = select(meas, args)
     if not sel:
-        sys.exit("Aucune mesure ne correspond à la sélection.")
+        sys.exit("No measurement matches the selection.")
 
     outdir = args.out or time.strftime("viz_%Y%m%d_%H%M%S")
     os.makedirs(outdir, exist_ok=True)
@@ -341,11 +342,11 @@ def main():
         png = os.path.join(outdir, f"b{m.beacon}_rc{m.counter}.png")
         res = plot_measurement(m, png, args.rmax_view)
         if res is None:
-            print(f"[b{m.beacon} rc{m.counter} : trop peu de tones valides, ignorée]",
+            print(f"[b{m.beacon} rc{m.counter}: too few valid tones, skipped]",
                   file=sys.stderr)
             continue
         d_ifft, d_bay = res
-        print(f"b{m.beacon} rc{m.counter}: IFFT={d_ifft:.2f} m  bayésien={d_bay:.2f} m  -> {png}")
+        print(f"b{m.beacon} rc{m.counter}: IFFT={d_ifft:.2f} m  Bayesian={d_bay:.2f} m  -> {png}")
     print(f"[figures -> {outdir}/]")
 
 
